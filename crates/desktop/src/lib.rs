@@ -54,6 +54,20 @@ pub enum UiAction {
     ToggleTheme,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CommandResult {
+    #[default]
+    Unavailable,
+    Applied(Box<AppShellView>),
+    Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandEffect {
+    pub updated_view: Option<AppShellView>,
+    pub notice: String,
+}
+
 #[must_use]
 pub fn reduce_ui_state(mut state: UiState, action: &UiAction) -> UiState {
     match action {
@@ -71,16 +85,69 @@ pub fn reduce_ui_state(mut state: UiState, action: &UiAction) -> UiState {
 }
 
 #[must_use]
+pub fn execute_board_intent(
+    view: &AppShellView,
+    intent: BoardIntent,
+    execute: impl FnOnce(ApplicationCommand) -> CommandResult,
+) -> CommandEffect {
+    let command = match command_for_board_intent(view, intent) {
+        Ok(command) => command,
+        Err(error) => {
+            return CommandEffect {
+                updated_view: None,
+                notice: format!("操作できません: {error}"),
+            };
+        }
+    };
+    let prepared = command_description(&command);
+    match execute(command) {
+        CommandResult::Unavailable => CommandEffect {
+            updated_view: None,
+            notice: prepared,
+        },
+        CommandResult::Applied(updated_view) => {
+            let updated_view = *updated_view;
+            let run_id = updated_view
+                .development
+                .task_rows
+                .iter()
+                .find_map(|row| {
+                    (row.run_status.as_deref() == Some("QUEUED"))
+                        .then(|| row.current_run_id.clone())
+                        .flatten()
+                })
+                .unwrap_or_else(|| "Run ID未確認".to_owned());
+            CommandEffect {
+                notice: format!(
+                    "Queue登録完了: {run_id} / projection rev {}",
+                    updated_view.projection_revision
+                ),
+                updated_view: Some(updated_view),
+            }
+        }
+        CommandResult::Failed(error) => CommandEffect {
+            updated_view: None,
+            notice: format!("Queue登録失敗: {error}"),
+        },
+    }
+}
+
+#[must_use]
 pub fn render_app(view: &AppShellView) -> String {
     dioxus_ssr::render_element(rsx! { App { initial_view: view.clone() } })
 }
 
 #[component]
-pub fn App(initial_view: AppShellView) -> Element {
+pub fn App(
+    initial_view: AppShellView,
+    on_command: Option<Callback<ApplicationCommand, CommandResult>>,
+) -> Element {
+    let app_view = use_signal(move || initial_view);
     let ui_state = use_signal(UiState::default);
     let command_notice = use_signal(|| None::<String>);
+    let view = app_view.read().clone();
     let state = ui_state.read().clone();
-    let connection = connection_presentation(&initial_view.connection);
+    let connection = connection_presentation(&view.connection);
     let night_mode = state.color_theme == ColorTheme::Night;
     let shell_class = if night_mode {
         "app-shell theme-night"
@@ -112,8 +179,8 @@ pub fn App(initial_view: AppShellView) -> Element {
                 },
                 span { class: "nav-index", "{index}" }
                 span { "{label}" }
-                if route == Route::Inbox && initial_view.inbox_count > 0 {
-                    span { class: "nav-badge", "{initial_view.inbox_count}" }
+                if route == Route::Inbox && view.inbox_count > 0 {
+                    span { class: "nav-badge", "{view.inbox_count}" }
                 }
             }
         }
@@ -133,11 +200,11 @@ pub fn App(initial_view: AppShellView) -> Element {
                 div { class: "project-context",
                     span { class: "context-label", "ACTIVE PROJECT" }
                     div { class: "context-project",
-                        strong { "{initial_view.project_name}" }
+                        strong { "{view.project_name}" }
                         span { class: "project-separator", "/" }
-                        span { class: "meta-path", "{initial_view.project_root}" }
+                        span { class: "meta-path", "{view.project_root}" }
                     }
-                    span { class: "meta-commit", "main · {initial_view.main_commit}" }
+                    span { class: "meta-commit", "main · {view.main_commit}" }
                 }
                 div { class: "topbar-actions",
                     button {
@@ -184,9 +251,9 @@ pub fn App(initial_view: AppShellView) -> Element {
                         p { "PROJECTION" }
                         div { class: "projection-line",
                             span { class: "projection-pulse" }
-                            strong { "rev {initial_view.projection_revision}" }
+                            strong { "rev {view.projection_revision}" }
                         }
-                        span { "同期: {initial_view.last_synced_at}" }
+                        span { "同期: {view.last_synced_at}" }
                     }
                 }
 
@@ -197,10 +264,12 @@ pub fn App(initial_view: AppShellView) -> Element {
                     {
                         match state.route {
                             Route::Development => development_board(
-                                &initial_view,
+                                &view,
                                 &state,
                                 ui_state,
                                 command_notice,
+                                app_view,
+                                on_command,
                             ),
                             route => placeholder(route),
                         }
@@ -211,8 +280,8 @@ pub fn App(initial_view: AppShellView) -> Element {
             footer { class: "statusbar",
                 span { class: "status-brand", "GF / COORDINATOR" }
                 span { "STATUS · {connection.label}" }
-                span { "CAPACITY · {initial_view.max_concurrent_task_runs}" }
-                span { "PROJECTION · R{initial_view.projection_revision}" }
+                span { "CAPACITY · {view.max_concurrent_task_runs}" }
+                span { "PROJECTION · R{view.projection_revision}" }
             }
         }
     }
@@ -233,6 +302,8 @@ fn development_board(
     state: &UiState,
     ui_state: Signal<UiState>,
     command_notice: Signal<Option<String>>,
+    app_view: Signal<AppShellView>,
+    on_command: Option<Callback<ApplicationCommand, CommandResult>>,
 ) -> Element {
     let summary = view.development.summary;
     let summary_cards = [
@@ -356,6 +427,8 @@ fn development_board(
         let mut state_signal = ui_state;
         let mut link_state_signal = ui_state;
         let mut notice_signal = command_notice;
+        let mut view_signal = app_view;
+        let command_callback = on_command;
         let unavailable_reason = row.queue_unavailable_reason.clone().unwrap_or_default();
         let health_label = row.health_flags.join(", ");
         rsx! {
@@ -409,14 +482,18 @@ fn development_board(
                         title: "{unavailable_reason}",
                         onclick: move |event| {
                             event.stop_propagation();
-                            let notice = match command_for_board_intent(
+                            let effect = execute_board_intent(
                                 &command_view,
                                 BoardIntent::QueueTask { task_id: queue_id.clone() },
-                            ) {
-                                Ok(command) => command_description(&command),
-                                Err(error) => format!("操作できません: {error}"),
-                            };
-                            notice_signal.set(Some(notice));
+                                |command| command_callback.map_or(
+                                    CommandResult::Unavailable,
+                                    |callback| callback.call(command),
+                                ),
+                            );
+                            if let Some(updated_view) = effect.updated_view {
+                                view_signal.set(updated_view);
+                            }
+                            notice_signal.set(Some(effect.notice));
                         },
                         "Queue Task"
                     }
@@ -425,7 +502,9 @@ fn development_board(
         }
     });
     let mut next_notice_signal = command_notice;
+    let mut next_view_signal = app_view;
     let next_command_view = view.clone();
+    let next_command_callback = on_command;
     let mut inspector_state_signal = ui_state;
 
     rsx! {
@@ -456,16 +535,20 @@ fn development_board(
                     button {
                         class: "primary-action",
                         onclick: move |_| {
-                            let notice = match command_for_board_intent(
+                            let effect = execute_board_intent(
                                 &next_command_view,
                                 BoardIntent::QueueTask {
                                     task_id: next_task.task_id.clone(),
                                 },
-                            ) {
-                                Ok(command) => command_description(&command),
-                                Err(error) => format!("操作できません: {error}"),
-                            };
-                            next_notice_signal.set(Some(notice));
+                                |command| next_command_callback.map_or(
+                                    CommandResult::Unavailable,
+                                    |callback| callback.call(command),
+                                ),
+                            );
+                            if let Some(updated_view) = effect.updated_view {
+                                next_view_signal.set(updated_view);
+                            }
+                            next_notice_signal.set(Some(effect.notice));
                         },
                         "Queue Task"
                         span { "→" }
