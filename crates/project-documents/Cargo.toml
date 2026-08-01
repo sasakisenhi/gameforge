@@ -1,0 +1,13 @@
+[package]
+name = "gameforgo-project-documents"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+gameforgo-domain = { path = "../domain" }
+
+[lints]
+workspace = true
+

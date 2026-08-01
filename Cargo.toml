@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/domain"]
+members = [
+    "crates/domain",
+    "crates/event-journal",
+    "crates/persistence",
+    "crates/project-documents",
+]
 resolver = "3"
 
 [workspace.package]
@@ -13,4 +18,3 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
-
