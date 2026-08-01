@@ -204,7 +204,29 @@ pub fn compose_app_shell_with_inbox(
             }
         })
         .collect();
-    let inbox_items = inbox_records
+    let inbox = compose_inbox(context.projection_revision, inbox_records);
+
+    AppShellView {
+        project_name: context.project_name,
+        project_root: context.project_root,
+        main_commit: context.main_commit,
+        connection: context.connection,
+        projection_revision: context.projection_revision,
+        last_synced_at: context.last_synced_at,
+        is_stale: context.is_stale,
+        inbox_count: inbox.pending,
+        max_concurrent_task_runs: context.max_concurrent_task_runs,
+        development: DevelopmentBoardView {
+            projection_revision: context.projection_revision,
+            summary,
+            task_rows,
+        },
+        inbox,
+    }
+}
+
+fn compose_inbox(projection_revision: u64, records: Vec<InboxItemRecord>) -> InboxView {
+    let items = records
         .into_iter()
         .map(|record| InboxItemView {
             request_id: record.request_id,
@@ -216,31 +238,11 @@ pub fn compose_app_shell_with_inbox(
             requested_at: record.requested_at,
         })
         .collect::<Vec<_>>();
-    let pending = inbox_items
-        .iter()
-        .filter(|item| item.status == "PENDING")
-        .count();
-
-    AppShellView {
-        project_name: context.project_name,
-        project_root: context.project_root,
-        main_commit: context.main_commit,
-        connection: context.connection,
-        projection_revision: context.projection_revision,
-        last_synced_at: context.last_synced_at,
-        is_stale: context.is_stale,
-        inbox_count: pending,
-        max_concurrent_task_runs: context.max_concurrent_task_runs,
-        development: DevelopmentBoardView {
-            projection_revision: context.projection_revision,
-            summary,
-            task_rows,
-        },
-        inbox: InboxView {
-            projection_revision: context.projection_revision,
-            pending,
-            items: inbox_items,
-        },
+    let pending = items.iter().filter(|item| item.status == "PENDING").count();
+    InboxView {
+        projection_revision,
+        pending,
+        items,
     }
 }
 

@@ -294,18 +294,7 @@ fn apply_event_in_transaction(
                 });
             }
             if state == "INPUT_REQUIRED" {
-                transaction.execute(
-                    "INSERT INTO inbox_rows(
-                        request_id, task_id, task_run_id, request_kind, prompt, status, requested_at
-                     ) VALUES (?1, ?2, ?3, 'INPUT', ?4, 'PENDING', ?5)",
-                    params![
-                        payload(event, "request_id")?,
-                        task_id,
-                        run_id,
-                        payload(event, "request_prompt")?,
-                        header.occurred_at,
-                    ],
-                )?;
+                insert_input_request(transaction, event, task_id, run_id)?;
             }
         }
         _ => {}
@@ -332,6 +321,27 @@ fn apply_event_in_transaction(
     transaction.execute(
         "UPDATE projection_meta SET value = value + 1 WHERE key = 'revision'",
         [],
+    )?;
+    Ok(())
+}
+
+fn insert_input_request(
+    transaction: &Transaction<'_>,
+    event: &EventEnvelope,
+    task_id: &str,
+    run_id: &str,
+) -> Result<(), ProjectionError> {
+    transaction.execute(
+        "INSERT INTO inbox_rows(
+            request_id, task_id, task_run_id, request_kind, prompt, status, requested_at
+         ) VALUES (?1, ?2, ?3, 'INPUT', ?4, 'PENDING', ?5)",
+        params![
+            payload(event, "request_id")?,
+            task_id,
+            run_id,
+            payload(event, "request_prompt")?,
+            event.header().occurred_at,
+        ],
     )?;
     Ok(())
 }
