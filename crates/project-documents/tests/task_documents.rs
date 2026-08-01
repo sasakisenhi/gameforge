@@ -1,4 +1,7 @@
-use gameforge_project_documents::{DocumentError, load_task_document, validate_task_documents};
+use gameforge_project_documents::{
+    ChangedPathViolation, DocumentError, load_task_document, validate_changed_paths,
+    validate_task_documents,
+};
 
 fn task_document(id: &str, dependency: &str) -> String {
     format!(
@@ -87,4 +90,61 @@ fn rejects_unknown_front_matter_fields() {
         load_task_document(&source),
         Err(DocumentError::InvalidFrontMatter(_))
     ));
+}
+
+#[test]
+fn validates_changed_path_against_exact_pattern() {
+    let source = task_document("TASK-001", " []").replacen(
+        "crates/game_logic/src/sand/**",
+        "crates/game_logic/Cargo.toml",
+        1,
+    );
+    let task = load_task_document(&source).unwrap();
+
+    validate_changed_paths(&task, ["crates/game_logic/Cargo.toml"]).unwrap();
+
+    let error = validate_changed_paths(&task, ["crates/game_logic/src/lib.rs"]).unwrap_err();
+    assert_eq!(
+        error.violations(),
+        [ChangedPathViolation::OutsideAllowedAndTestPaths {
+            path: "crates/game_logic/src/lib.rs".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn single_star_matches_exactly_one_path_segment() {
+    let source = task_document("TASK-001", " []").replacen(
+        "crates/game_logic/src/sand/**",
+        "crates/*/Cargo.toml",
+        1,
+    );
+    let task = load_task_document(&source).unwrap();
+
+    validate_changed_paths(&task, ["crates/game_logic/Cargo.toml"]).unwrap();
+
+    let error = validate_changed_paths(&task, ["crates/game_logic/src/Cargo.toml"]).unwrap_err();
+    assert!(matches!(
+        error.violations(),
+        [ChangedPathViolation::OutsideAllowedAndTestPaths { .. }]
+    ));
+}
+
+#[test]
+fn double_star_matches_path_segments_recursively() {
+    let source = task_document("TASK-001", " []").replacen(
+        "crates/game_logic/src/sand/**",
+        "crates/**/sand/*",
+        1,
+    );
+    let task = load_task_document(&source).unwrap();
+
+    validate_changed_paths(
+        &task,
+        [
+            "crates/sand/rules.rs",
+            "crates/game_logic/src/sand/rules.rs",
+        ],
+    )
+    .unwrap();
 }
