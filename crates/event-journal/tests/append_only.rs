@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -38,6 +39,12 @@ fn event(id: &str, version: u64, event_type: &str) -> EventEnvelope {
         ]),
     )
     .unwrap()
+}
+
+fn append_bytes(path: &PathBuf, bytes: &[u8]) {
+    let mut file = OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(bytes).unwrap();
+    file.sync_data().unwrap();
 }
 
 #[test]
@@ -86,5 +93,107 @@ fn rejects_corrupted_journal_instead_of_ignoring_it() {
         EventJournal::open(&path),
         Err(JournalError::InvalidRecord { line: 1, .. })
     ));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn identifies_an_unterminated_incomplete_final_record() {
+    let path = temp_journal();
+    let mut journal = EventJournal::open(&path).unwrap();
+    journal.append(&event("EVT-1", 1, "TaskRunQueued")).unwrap();
+    drop(journal);
+
+    let record = serde_json::to_vec(&event("EVT-2", 2, "TaskRunPreparationStarted")).unwrap();
+    let incomplete = &record[..record.len() - 1];
+    append_bytes(&path, incomplete);
+
+    assert!(matches!(
+        EventJournal::open(&path),
+        Err(JournalError::IncompleteTail {
+            line: 2,
+            incomplete_bytes,
+        }) if incomplete_bytes == incomplete.len() as u64
+    ));
+
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn recovers_only_the_incomplete_tail_and_continues_aggregate_versions() {
+    let path = temp_journal();
+    let mut journal = EventJournal::open(&path).unwrap();
+    journal.append(&event("EVT-1", 1, "TaskRunQueued")).unwrap();
+    journal
+        .append(&event("EVT-2", 2, "TaskRunPreparationStarted"))
+        .unwrap();
+    drop(journal);
+
+    let retained_bytes = fs::metadata(&path).unwrap().len();
+    let record = serde_json::to_vec(&event("EVT-3", 3, "TaskRunStarted")).unwrap();
+    let incomplete = &record[..record.len() - 1];
+    append_bytes(&path, incomplete);
+
+    let recovery = EventJournal::recover_incomplete_tail(&path).unwrap();
+    assert_eq!(recovery.truncated_bytes(), incomplete.len() as u64);
+    assert_eq!(recovery.retained_bytes(), retained_bytes);
+    assert_eq!(fs::metadata(&path).unwrap().len(), retained_bytes);
+
+    let mut recovered = EventJournal::open(&path).unwrap();
+    recovered
+        .append(&event("EVT-3", 3, "TaskRunStarted"))
+        .unwrap();
+    assert_eq!(EventJournal::open(&path).unwrap().events().len(), 3);
+
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn refuses_to_recover_a_newline_terminated_corrupt_record() {
+    let path = temp_journal();
+    fs::write(&path, "{not-json}\n").unwrap();
+    let original = fs::read(&path).unwrap();
+
+    assert!(matches!(
+        EventJournal::recover_incomplete_tail(&path),
+        Err(JournalError::InvalidRecord { line: 1, .. })
+    ));
+    assert_eq!(fs::read(&path).unwrap(), original);
+
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn refuses_to_recover_when_an_earlier_record_is_corrupt() {
+    let path = temp_journal();
+    let mut journal = EventJournal::open(&path).unwrap();
+    journal.append(&event("EVT-1", 1, "TaskRunQueued")).unwrap();
+    drop(journal);
+
+    append_bytes(&path, b"{not-json}\n");
+    let record = serde_json::to_vec(&event("EVT-2", 2, "TaskRunPreparationStarted")).unwrap();
+    append_bytes(&path, &record[..record.len() - 1]);
+    let original = fs::read(&path).unwrap();
+
+    assert!(matches!(
+        EventJournal::recover_incomplete_tail(&path),
+        Err(JournalError::InvalidRecord { line: 2, .. })
+    ));
+    assert_eq!(fs::read(&path).unwrap(), original);
+
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn refuses_to_recover_an_unterminated_syntax_error() {
+    let path = temp_journal();
+    fs::write(&path, "{not-json}").unwrap();
+    let original = fs::read(&path).unwrap();
+
+    assert!(matches!(
+        EventJournal::recover_incomplete_tail(&path),
+        Err(JournalError::InvalidRecord { line: 1, .. })
+    ));
+    assert_eq!(fs::read(&path).unwrap(), original);
+
     fs::remove_file(path).unwrap();
 }
