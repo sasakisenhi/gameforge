@@ -16,6 +16,7 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 - Dioxus NativeのApplication Shell、Development Board、切断時の読み取り専用表示
 - GUI起動中にWriter Leaseを保持するProject Session
 - Queue commandのEvent Journal永続化、冪等な再送、Projection競合検出
+- 決定的な優先順と実行上限1を守るScheduler Policy
 
 ## Desktop
 
@@ -25,9 +26,9 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 cargo run -p gameforge-desktop -- examples/powder-game
 ```
 
-画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Project Sessionが`TaskRunQueued`をEvent Journalへ記録してRead Modelと画面を更新します。同じcommand IDの再送は重複記録せず、古いProjection revisionからの操作は変更前に拒否します。
+画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Project Sessionが`TaskRunQueued`をEvent Journalへ記録します。続けてSchedulerがQueueを評価し、容量が空いていれば最初のTask Runを`PREPARING`へ進めてRead Modelと画面を更新します。同じcommand IDの再送は重複記録せず、古いProjection revisionからの操作は変更前に拒否します。
 
-現在の実行容量表示は1です。Queue登録後にworktreeやCodexを起動するSchedulerは次の縦切りで接続するため、この段階ではTask Runは`QUEUED`に留まります。
+現在の実行容量は1です。実行中のRunがある場合、後続Runは`QUEUED`に留まります。worktreeやCodexを起動して`AGENT_RUNNING`へ進めるRun Supervisorは次の縦切りで接続します。
 
 ## CLI
 
@@ -56,7 +57,7 @@ examples/powder-game/.game-dev/
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo build --workspace
+cargo clippy --workspace --all-targets -j 1 -- -D warnings
+cargo test --workspace -j 1
+cargo build --workspace -j 1
 ```
