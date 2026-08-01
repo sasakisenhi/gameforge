@@ -15,6 +15,7 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 - Application層が所有する型付きView DTOとrevision付きCommand変換
 - Dioxus NativeのApplication Shell、Development Board、切断時の読み取り専用表示
 - GUI起動中にWriter Leaseを保持するProject Session
+- Queue commandのEvent Journal永続化、冪等な再送、Projection競合検出
 
 ## Desktop
 
@@ -24,7 +25,9 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 cargo run -p gameforge-desktop -- examples/powder-game
 ```
 
-画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Coordinatorへ送信する処理は次の縦切りで接続します。
+画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Project Sessionが`TaskRunQueued`をEvent Journalへ記録してRead Modelと画面を更新します。同じcommand IDの再送は重複記録せず、古いProjection revisionからの操作は変更前に拒否します。
+
+現在の実行容量表示は1です。Queue登録後にworktreeやCodexを起動するSchedulerは次の縦切りで接続するため、この段階ではTask Runは`QUEUED`に留まります。
 
 ## CLI
 
