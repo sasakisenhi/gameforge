@@ -26,7 +26,7 @@ fn command_envelope_requires_stable_non_empty_ids() {
     )
     .unwrap();
     assert_eq!(envelope.expected_aggregate_version(), 4);
-    assert_eq!(envelope.payload(), "queue-task-run");
+    assert_eq!(*envelope.payload(), "queue-task-run");
 
     assert!(matches!(
         CommandEnvelope::new("", "PROJECT-1", "CLI-1", 4, "now", ()),
