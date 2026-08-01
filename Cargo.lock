@@ -140,6 +140,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "gameforgo-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "gameforgo-event-journal",
+ "gameforgo-persistence",
+ "gameforgo-project-documents",
+ "gameforgo-runtime",
+]
+
+[[package]]
+name = "gameforgo-cli"
+version = "0.1.0"
+dependencies = [
+ "gameforgo-bootstrap",
+]
+
+[[package]]
 name = "gameforgo-control-protocol"
 version = "0.1.0"
 
