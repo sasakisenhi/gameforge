@@ -248,11 +248,12 @@ fn apply_event_in_transaction(
                 .payload()
                 .get("state")
                 .map_or("QUEUED", String::as_str);
+            let current_run_id = (state != "CANCELLED").then_some(run_id);
             let updated = transaction.execute(
                 "UPDATE development_board_rows
                  SET current_run_id = ?1, run_status = ?2
                  WHERE task_id = ?3",
-                params![run_id, state, task_id],
+                params![current_run_id, state, task_id],
             )?;
             if updated == 0 {
                 return Err(ProjectionError::TaskNotFound {

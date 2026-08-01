@@ -77,6 +77,28 @@ fn maps_board_intent_to_a_versioned_application_command() {
 }
 
 #[test]
+fn maps_cancel_intent_for_an_active_run() {
+    let view = compose_app_shell(
+        context(ConnectionState::Connected),
+        vec![record("TASK-1", "READY", Some("RUN-1"), Some("PREPARING"))],
+    );
+
+    assert_eq!(
+        command_for_board_intent(
+            &view,
+            BoardIntent::CancelRun {
+                task_run_id: "RUN-1".to_owned(),
+            },
+        )
+        .unwrap(),
+        ApplicationCommand::CancelTaskRun {
+            task_run_id: "RUN-1".to_owned(),
+            expected_projection_revision: 42,
+        }
+    );
+}
+
+#[test]
 fn rejects_mutation_from_disconnected_stale_or_busy_views() {
     let disconnected = compose_app_shell(
         context(ConnectionState::Disconnected {
