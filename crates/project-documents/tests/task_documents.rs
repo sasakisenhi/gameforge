@@ -1,0 +1,90 @@
+use gameforgo_project_documents::{DocumentError, load_task_document, validate_task_documents};
+
+fn task_document(id: &str, dependency: &str) -> String {
+    format!(
+        r"---
+schema_version: 1
+id: {id}
+title: 砂の落下規則
+status: ready
+contract_revision: 1
+acceptance_criteria:
+  - AC-001
+dependencies:{dependency}
+allowed_paths:
+  - crates/game_logic/src/sand/**
+test_paths:
+  - crates/game_logic/tests/sand/**
+forbidden_paths:
+  - crates/game_runtime/**
+risk: low
+---
+
+# 目的
+
+空きセルが下にある場合、砂を下方向へ移動させる。
+"
+    )
+}
+
+#[test]
+fn loads_typed_front_matter_and_preserves_markdown_body() {
+    let source = task_document("TASK-001", " []");
+    let task = load_task_document(&source).unwrap();
+
+    assert_eq!(task.id().as_str(), "TASK-001");
+    assert_eq!(task.title(), "砂の落下規則");
+    assert_eq!(task.contract_revision().get(), 1);
+    assert_eq!(task.allowed_paths(), ["crates/game_logic/src/sand/**"]);
+    assert!(task.body().contains("# 目的"));
+    assert_eq!(task.content_hash().as_str().len(), 64);
+}
+
+#[test]
+fn rejects_unknown_schema_and_unsafe_paths() {
+    let unsupported =
+        task_document("TASK-001", " []").replacen("schema_version: 1", "schema_version: 2", 1);
+    assert!(matches!(
+        load_task_document(&unsupported),
+        Err(DocumentError::UnsupportedSchemaVersion(2))
+    ));
+
+    let unsafe_path = task_document("TASK-001", " []").replacen(
+        "crates/game_logic/src/sand/**",
+        "../outside/**",
+        1,
+    );
+    assert!(matches!(
+        load_task_document(&unsafe_path),
+        Err(DocumentError::UnsafePath(_))
+    ));
+}
+
+#[test]
+fn validates_dependencies_across_loaded_documents() {
+    let one = load_task_document(&task_document(
+        "TASK-001",
+        "\n  - task_id: TASK-002\n    kind: blocks_start\n    reason: APIが必要",
+    ))
+    .unwrap();
+    let two = load_task_document(&task_document(
+        "TASK-002",
+        "\n  - task_id: TASK-001\n    kind: blocks_integration\n    reason: 設定が必要",
+    ))
+    .unwrap();
+
+    assert!(matches!(
+        validate_task_documents(&[one, two]),
+        Err(DocumentError::InvalidTaskGraph(_))
+    ));
+}
+
+#[test]
+fn rejects_unknown_front_matter_fields() {
+    let source =
+        task_document("TASK-001", " []").replacen("risk: low", "risk: low\nunexpected: value", 1);
+    assert!(matches!(
+        load_task_document(&source),
+        Err(DocumentError::InvalidFrontMatter(_))
+    ));
+}

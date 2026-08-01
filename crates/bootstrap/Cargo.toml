@@ -1,0 +1,16 @@
+[package]
+name = "gameforgo-bootstrap"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+gameforgo-event-journal = { path = "../event-journal" }
+gameforgo-persistence = { path = "../persistence" }
+gameforgo-project-documents = { path = "../project-documents" }
+gameforgo-runtime = { path = "../runtime" }
+
+[lints]
+workspace = true
+
