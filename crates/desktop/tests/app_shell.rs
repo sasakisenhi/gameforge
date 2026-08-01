@@ -65,6 +65,7 @@ fn renders_application_shell_and_development_board_from_view_dto() {
     assert!(html.contains("aria-current=\"page\""));
     assert!(html.contains("Switch to night mode"));
     assert!(html.contains("PROJECTION · REV 42"));
+    assert!(html.contains("Cancel Run"));
 }
 
 #[test]
@@ -159,4 +160,44 @@ fn queue_action_keeps_the_current_view_when_the_coordinator_rejects_it() {
     assert_eq!(effect.updated_view, None);
     assert!(effect.notice.contains("Queue登録失敗"));
     assert!(effect.notice.contains("projection revision conflict"));
+}
+
+#[test]
+fn cancel_action_reports_the_cancelled_run_and_updates_the_view() {
+    let current = view(ConnectionState::Connected, vec![row()]);
+    let mut cancelled = view(
+        ConnectionState::Connected,
+        vec![DevelopmentBoardRecord {
+            task_id: "TASK-001".to_owned(),
+            title: "砂の落下規則".to_owned(),
+            task_status: "READY".to_owned(),
+            current_run_id: None,
+            run_status: Some("CANCELLED".to_owned()),
+            health_flags: Vec::new(),
+        }],
+    );
+    cancelled.projection_revision = 43;
+    cancelled.development.projection_revision = 43;
+
+    let effect = execute_board_intent(
+        &current,
+        gameforge_application::BoardIntent::CancelRun {
+            task_run_id: "RUN-001".to_owned(),
+        },
+        |command| {
+            assert_eq!(
+                command,
+                gameforge_application::ApplicationCommand::CancelTaskRun {
+                    task_run_id: "RUN-001".to_owned(),
+                    expected_projection_revision: 42,
+                }
+            );
+            CommandResult::Applied(Box::new(cancelled.clone()))
+        },
+    );
+
+    assert_eq!(effect.updated_view, Some(cancelled));
+    assert!(effect.notice.contains("Run取消し完了"));
+    assert!(effect.notice.contains("RUN-001"));
+    assert!(effect.notice.contains("CANCELLED"));
 }
