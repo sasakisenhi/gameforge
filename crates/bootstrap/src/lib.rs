@@ -70,7 +70,16 @@ impl ProjectSession {
             .find(|event| event.header().correlation_id == context.command_id)
         {
             let same_command = previous.event_type() == "TaskRunQueued"
-                && previous.payload().get("task_id").map(String::as_str) == Some(task_id);
+                && previous.payload().get("task_id").map(String::as_str) == Some(task_id)
+                && previous.payload().get("base_commit").map(String::as_str)
+                    == Some(context.base_commit.as_str())
+                && previous
+                    .payload()
+                    .get("expected_projection_revision")
+                    .and_then(|revision| revision.parse::<u64>().ok())
+                    == Some(expected_projection_revision)
+                && previous.header().actor == context.actor
+                && previous.header().occurred_at == context.occurred_at;
             return if same_command {
                 Ok(self.snapshot.clone())
             } else {
@@ -124,7 +133,7 @@ impl ProjectSession {
             document.contract_revision(),
             base_commit,
         );
-        let event = queued_event(&context, &task_run)?;
+        let event = queued_event(&context, &task_run, expected_projection_revision)?;
 
         self.journal
             .append(&event)
@@ -298,6 +307,7 @@ fn validate_command_context(context: &CommandContext) -> Result<(), BootstrapErr
 fn queued_event(
     context: &CommandContext,
     task_run: &TaskRun,
+    expected_projection_revision: u64,
 ) -> Result<EventEnvelope, BootstrapError> {
     let run_id = task_run.id().as_str();
     let mut payload = BTreeMap::new();
@@ -311,6 +321,10 @@ fn queued_event(
     payload.insert(
         "base_commit".to_owned(),
         task_run.base_commit().as_str().to_owned(),
+    );
+    payload.insert(
+        "expected_projection_revision".to_owned(),
+        expected_projection_revision.to_string(),
     );
     let aggregate = AggregateRef::new("TaskRun", run_id)
         .map_err(|error| BootstrapError::Journal(error.to_string()))?;

@@ -135,12 +135,37 @@ fn retrying_the_same_command_does_not_duplicate_the_run_or_event() {
     let first = session
         .execute(command_context("CMD-001"), command.clone())
         .unwrap();
-    let retried = session
+    drop(session);
+    let mut restarted = start_project(project.path(), "restarted-coordinator").unwrap();
+    let retried = restarted
         .execute(command_context("CMD-001"), command)
         .unwrap();
 
     assert_eq!(retried, first);
     assert_eq!(retried.projection_revision, 1);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 1);
+}
+
+#[test]
+fn reusing_a_command_id_with_different_content_is_rejected() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    let command = ApplicationCommand::QueueTaskRun {
+        task_id: "TASK-001".to_owned(),
+        expected_projection_revision: 0,
+    };
+    session
+        .execute(command_context("CMD-001"), command.clone())
+        .unwrap();
+
+    let mut changed_context = command_context("CMD-001");
+    changed_context.base_commit = "b".repeat(40);
+    assert_eq!(
+        session.execute(changed_context, command).unwrap_err(),
+        BootstrapError::CommandIdConflict("CMD-001".to_owned())
+    );
+    assert_eq!(session.snapshot().projection_revision, 1);
     let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
     assert_eq!(journal.lines().count(), 1);
 }
