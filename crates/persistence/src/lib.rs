@@ -46,6 +46,11 @@ pub enum ProjectionError {
         event_type: String,
         task_id: String,
     },
+    TaskRunIdMismatch {
+        event_type: String,
+        payload_run_id: String,
+        aggregate_id: String,
+    },
     AggregateVersion {
         aggregate_type: String,
         aggregate_id: String,
@@ -69,6 +74,14 @@ impl fmt::Display for ProjectionError {
                 event_type,
                 task_id,
             } => write!(formatter, "{event_type} references missing Task {task_id}"),
+            Self::TaskRunIdMismatch {
+                event_type,
+                payload_run_id,
+                aggregate_id,
+            } => write!(
+                formatter,
+                "{event_type} payload run_id {payload_run_id} does not match TaskRun aggregate ID {aggregate_id}"
+            ),
             Self::AggregateVersion {
                 aggregate_type,
                 aggregate_id,
@@ -223,6 +236,14 @@ fn apply_event_in_transaction(
         "TaskRunQueued" | "TaskRunStateChanged" => {
             let task_id = payload(event, "task_id")?;
             let run_id = payload(event, "run_id")?;
+            let aggregate_id = header.aggregate.aggregate_id();
+            if run_id != aggregate_id {
+                return Err(ProjectionError::TaskRunIdMismatch {
+                    event_type: event.event_type().to_owned(),
+                    payload_run_id: run_id.to_owned(),
+                    aggregate_id: aggregate_id.to_owned(),
+                });
+            }
             let state = event
                 .payload()
                 .get("state")
