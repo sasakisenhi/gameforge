@@ -7,6 +7,7 @@ use gameforge_application::{
 };
 
 const APP_CSS: &str = include_str!("app.css");
+const BRAND_ICON_SVG: &str = include_str!("../assets/brand-icon.svg");
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Route {
@@ -24,8 +25,17 @@ pub enum TaskFilter {
     All,
     Runnable,
     Running,
+    Queued,
+    DependencyBlocked,
     Failed,
     HumanWait,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ColorTheme {
+    #[default]
+    Light,
+    Night,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,6 +43,7 @@ pub struct UiState {
     pub route: Route,
     pub task_filter: TaskFilter,
     pub selected_task_id: Option<String>,
+    pub color_theme: ColorTheme,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +51,7 @@ pub enum UiAction {
     Navigate(Route),
     SetTaskFilter(TaskFilter),
     SelectTask(Option<String>),
+    ToggleTheme,
 }
 
 #[must_use]
@@ -48,6 +60,12 @@ pub fn reduce_ui_state(mut state: UiState, action: &UiAction) -> UiState {
         UiAction::Navigate(route) => state.route = *route,
         UiAction::SetTaskFilter(filter) => state.task_filter = *filter,
         UiAction::SelectTask(task_id) => state.selected_task_id.clone_from(task_id),
+        UiAction::ToggleTheme => {
+            state.color_theme = match state.color_theme {
+                ColorTheme::Light => ColorTheme::Night,
+                ColorTheme::Night => ColorTheme::Light,
+            };
+        }
     }
     state
 }
@@ -63,6 +81,13 @@ pub fn App(initial_view: AppShellView) -> Element {
     let command_notice = use_signal(|| None::<String>);
     let state = ui_state.read().clone();
     let connection = connection_presentation(&initial_view.connection);
+    let night_mode = state.color_theme == ColorTheme::Night;
+    let shell_class = if night_mode {
+        "app-shell theme-night"
+    } else {
+        "app-shell"
+    };
+    let mut theme_signal = ui_state;
     let nav_items = [
         (Route::Intent, "Intent", "01"),
         (Route::PlanReview, "Plan Review", "02"),
@@ -77,6 +102,7 @@ pub fn App(initial_view: AppShellView) -> Element {
         rsx! {
             button {
                 class: if active { "nav-item active" } else { "nav-item" },
+                aria_current: if active { "page" } else { "false" },
                 onclick: move |_| {
                     let next = reduce_ui_state(
                         state_signal.read().clone(),
@@ -95,22 +121,47 @@ pub fn App(initial_view: AppShellView) -> Element {
 
     rsx! {
         style { {APP_CSS} }
-        div { class: "app-shell",
+        div { class: "{shell_class}",
             header { class: "topbar",
                 div { class: "brand-block",
-                    div { class: "brand-mark", "GF" }
-                    div {
-                        p { class: "eyebrow", "PROJECT COORDINATOR" }
-                        h1 { "{initial_view.project_name}" }
+                    {brand_symbol()}
+                    div { class: "brand-type",
+                        span { class: "brand-name", "gameforge" }
+                        span { class: "brand-tagline", "BUILD CONTROL" }
                     }
                 }
-                div { class: "project-meta",
-                    span { class: "meta-path", "{initial_view.project_root}" }
-                    span { class: "meta-commit", "main @ {initial_view.main_commit}" }
+                div { class: "project-context",
+                    span { class: "context-label", "ACTIVE PROJECT" }
+                    div { class: "context-project",
+                        strong { "{initial_view.project_name}" }
+                        span { class: "project-separator", "/" }
+                        span { class: "meta-path", "{initial_view.project_root}" }
+                    }
+                    span { class: "meta-commit", "main · {initial_view.main_commit}" }
                 }
-                div { class: "connection {connection.class_name}",
-                    span { class: "connection-dot" }
-                    span { "{connection.label}" }
+                div { class: "topbar-actions",
+                    button {
+                        class: "theme-toggle",
+                        title: if night_mode { "Switch to light mode" } else { "Switch to night mode" },
+                        aria_pressed: "{night_mode}",
+                        onclick: move |_| {
+                            let next = reduce_ui_state(
+                                theme_signal.read().clone(),
+                                &UiAction::ToggleTheme,
+                            );
+                            theme_signal.set(next);
+                        },
+                        span { class: "theme-icon", if night_mode { "☀" } else { "◐" } }
+                        span { if night_mode { "DAY" } else { "NIGHT" } }
+                    }
+                    button { class: "command-trigger", title: "Command palette",
+                        span { "COMMAND" }
+                        kbd { "⌘ K" }
+                    }
+                    div { class: "connection {connection.class_name}",
+                        span { class: "connection-dot" }
+                        span { "{connection.label}" }
+                    }
                 }
             }
 
@@ -124,11 +175,17 @@ pub fn App(initial_view: AppShellView) -> Element {
 
             div { class: "workspace",
                 aside { class: "sidebar",
-                    p { class: "sidebar-label", "WORKFLOW" }
+                    div { class: "sidebar-heading",
+                        p { class: "sidebar-label", "WORKFLOW" }
+                        span { "01—05" }
+                    }
                     nav { {nav_items} }
                     div { class: "sidebar-footer",
                         p { "PROJECTION" }
-                        strong { "rev {initial_view.projection_revision}" }
+                        div { class: "projection-line",
+                            span { class: "projection-pulse" }
+                            strong { "rev {initial_view.projection_revision}" }
+                        }
                         span { "同期: {initial_view.last_synced_at}" }
                     }
                 }
@@ -152,10 +209,20 @@ pub fn App(initial_view: AppShellView) -> Element {
             }
 
             footer { class: "statusbar",
-                span { "Coordinator / {connection.label}" }
-                span { "同時実行上限 {initial_view.max_concurrent_task_runs}" }
-                span { "Projection rev {initial_view.projection_revision}" }
+                span { class: "status-brand", "GF / COORDINATOR" }
+                span { "STATUS · {connection.label}" }
+                span { "CAPACITY · {initial_view.max_concurrent_task_runs}" }
+                span { "PROJECTION · R{initial_view.projection_revision}" }
             }
+        }
+    }
+}
+
+fn brand_symbol() -> Element {
+    rsx! {
+        div {
+            class: "brand-mark brand-symbol",
+            dangerous_inner_html: "{BRAND_ICON_SVG}",
         }
     }
 }
@@ -168,10 +235,66 @@ fn development_board(
     command_notice: Signal<Option<String>>,
 ) -> Element {
     let summary = view.development.summary;
+    let summary_cards = [
+        (TaskFilter::Running, "RUNNING", summary.running, "blue", "↻"),
+        (
+            TaskFilter::Runnable,
+            "RUNNABLE",
+            summary.runnable,
+            "green",
+            "→",
+        ),
+        (TaskFilter::Queued, "QUEUED", summary.queued, "slate", "≡"),
+        (
+            TaskFilter::DependencyBlocked,
+            "DEPENDENCY",
+            summary.dependency_blocked,
+            "amber",
+            "⌁",
+        ),
+        (
+            TaskFilter::HumanWait,
+            "HUMAN WAIT",
+            summary.human_action_required,
+            "violet",
+            "!",
+        ),
+        (TaskFilter::Failed, "FAILED", summary.failed, "red", "△"),
+    ]
+    .into_iter()
+    .map(|(filter, label, value, tone, icon)| {
+        let mut state_signal = ui_state;
+        let active = state.task_filter == filter;
+        let emphasized = filter == TaskFilter::Runnable && value > 0;
+        let class_name = format!(
+            "summary-card {tone}{}{}",
+            if active { " active" } else { "" },
+            if emphasized { " primary" } else { "" },
+        );
+        rsx! {
+            button {
+                class: "{class_name}",
+                aria_pressed: "{active}",
+                title: "Filter by {label}",
+                onclick: move |_| {
+                    let next = reduce_ui_state(
+                        state_signal.read().clone(),
+                        &UiAction::SetTaskFilter(filter),
+                    );
+                    state_signal.set(next);
+                },
+                span { class: "summary-icon", "{icon}" }
+                span { class: "summary-label", "{label}" }
+                strong { "{value}" }
+            }
+        }
+    });
     let filters = [
         (TaskFilter::All, "All"),
         (TaskFilter::Runnable, "Runnable"),
         (TaskFilter::Running, "Running"),
+        (TaskFilter::Queued, "Queued"),
+        (TaskFilter::DependencyBlocked, "Dependency"),
         (TaskFilter::Failed, "Failed"),
         (TaskFilter::HumanWait, "Human wait"),
     ]
@@ -201,19 +324,45 @@ fn development_board(
         .cloned()
         .collect::<Vec<_>>();
     let has_rows = !visible_rows.is_empty();
+    let selected_row = state.selected_task_id.as_deref().and_then(|selected_id| {
+        view.development
+            .task_rows
+            .iter()
+            .find(|row| row.task_id == selected_id)
+            .cloned()
+    });
+    let selected_health_label = selected_row
+        .as_ref()
+        .map(|row| row.health_flags.join(", "))
+        .unwrap_or_default();
+    let next_runnable = view
+        .development
+        .task_rows
+        .iter()
+        .find(|row| row.can_queue)
+        .cloned();
     let rows = visible_rows.into_iter().map(|row| {
         let selected = state.selected_task_id.as_deref() == Some(row.task_id.as_str());
+        let row_class = match (selected, row.can_queue) {
+            (true, true) => "selected runnable",
+            (true, false) => "selected",
+            (false, true) => "runnable",
+            (false, false) => "",
+        };
         let selection_id = row.task_id.clone();
+        let link_selection_id = selection_id.clone();
         let queue_id = row.task_id.clone();
         let command_view = view.clone();
         let mut state_signal = ui_state;
+        let mut link_state_signal = ui_state;
         let mut notice_signal = command_notice;
         let unavailable_reason = row.queue_unavailable_reason.clone().unwrap_or_default();
         let health_label = row.health_flags.join(", ");
         rsx! {
             tr {
                 key: "{row.task_id}",
-                class: if selected { "selected" } else { "" },
+                class: "{row_class}",
+                aria_selected: "{selected}",
                 onclick: move |_| {
                     let next = reduce_ui_state(
                         state_signal.read().clone(),
@@ -223,7 +372,20 @@ fn development_board(
                 },
                 td { class: "task-identity",
                     strong { "{row.task_id}" }
-                    span { "{row.title}" }
+                    button {
+                        class: "task-link",
+                        title: "Open task details",
+                        onclick: move |event| {
+                            event.stop_propagation();
+                            let next = reduce_ui_state(
+                                link_state_signal.read().clone(),
+                                &UiAction::SelectTask(Some(link_selection_id.clone())),
+                            );
+                            link_state_signal.set(next);
+                        },
+                        "{row.title}"
+                        span { "→" }
+                    }
                 }
                 td { {status_pill(&row.task_status, "task")} }
                 td {
@@ -245,7 +407,8 @@ fn development_board(
                         class: "queue-button",
                         disabled: !row.can_queue,
                         title: "{unavailable_reason}",
-                        onclick: move |_| {
+                        onclick: move |event| {
+                            event.stop_propagation();
                             let notice = match command_for_board_intent(
                                 &command_view,
                                 BoardIntent::QueueTask { task_id: queue_id.clone() },
@@ -255,12 +418,15 @@ fn development_board(
                             };
                             notice_signal.set(Some(notice));
                         },
-                        "Queue"
+                        "Queue Task"
                     }
                 }
             }
         }
     });
+    let mut next_notice_signal = command_notice;
+    let next_command_view = view.clone();
+    let mut inspector_state_signal = ui_state;
 
     rsx! {
         section { class: "page development-page",
@@ -272,22 +438,49 @@ fn development_board(
                         "TaskとTask Runの現在地を、再構築可能なProjectionから確認します。"
                     }
                 }
-                div { class: "revision-stamp", "VIEW REV {view.development.projection_revision}" }
+                div {
+                    class: "revision-stamp",
+                    title: "Current read model projection revision",
+                    "PROJECTION · REV {view.development.projection_revision}"
+                }
+            }
+
+            if let Some(next_task) = next_runnable {
+                section { class: "next-action", aria_label: "Next action",
+                    div { class: "next-action-marker", "→" }
+                    div { class: "next-action-copy",
+                        span { "NEXT ACTION" }
+                        strong { "{next_task.task_id} · {next_task.title}" }
+                        p { "This task is ready to enter the execution queue." }
+                    }
+                    button {
+                        class: "primary-action",
+                        onclick: move |_| {
+                            let notice = match command_for_board_intent(
+                                &next_command_view,
+                                BoardIntent::QueueTask {
+                                    task_id: next_task.task_id.clone(),
+                                },
+                            ) {
+                                Ok(command) => command_description(&command),
+                                Err(error) => format!("操作できません: {error}"),
+                            };
+                            next_notice_signal.set(Some(notice));
+                        },
+                        "Queue Task"
+                        span { "→" }
+                    }
+                }
             }
 
             div { class: "summary-grid",
-                {summary_card("RUNNING", summary.running, "blue")}
-                {summary_card("RUNNABLE", summary.runnable, "green")}
-                {summary_card("QUEUED", summary.queued, "slate")}
-                {summary_card("DEPENDENCY", summary.dependency_blocked, "amber")}
-                {summary_card("HUMAN WAIT", summary.human_action_required, "violet")}
-                {summary_card("FAILED", summary.failed, "red")}
+                {summary_cards}
             }
 
             div { class: "board-panel",
                 div { class: "board-toolbar",
                     div { class: "filters", {filters} }
-                    span { class: "attention-count", "要確認 {summary.needs_attention}" }
+                    span { class: "attention-count", "NEEDS REVIEW · {summary.needs_attention}" }
                 }
                 if has_rows {
                     div { class: "table-scroll",
@@ -295,8 +488,8 @@ fn development_board(
                             thead {
                                 tr {
                                     th { "TASK" }
-                                    th { "TASK STATE" }
-                                    th { "RUN STATE" }
+                                    th { "TASK STATUS" }
+                                    th { "RUN STATUS" }
                                     th { "HEALTH" }
                                     th { "ACTION" }
                                 }
@@ -312,15 +505,67 @@ fn development_board(
                     }
                 }
             }
-        }
-    }
-}
 
-fn summary_card(label: &str, value: usize, tone: &str) -> Element {
-    rsx! {
-        article { class: "summary-card {tone}",
-            span { "{label}" }
-            strong { "{value}" }
+            if let Some(selected) = selected_row {
+                section { class: "task-inspector", aria_label: "Selected task details",
+                    header {
+                        div {
+                            span { class: "inspector-label", "TASK INSPECTOR" }
+                            h3 { "{selected.title}" }
+                            p { "{selected.task_id}" }
+                        }
+                        button {
+                            class: "inspector-close",
+                            title: "Close task details",
+                            onclick: move |_| {
+                                let next = reduce_ui_state(
+                                    inspector_state_signal.read().clone(),
+                                    &UiAction::SelectTask(None),
+                                );
+                                inspector_state_signal.set(next);
+                            },
+                            "Close ×"
+                        }
+                    }
+                    dl {
+                        div {
+                            dt { "TASK STATUS" }
+                            dd { {status_pill(&selected.task_status, "task")} }
+                        }
+                        div {
+                            dt { "CURRENT RUN" }
+                            dd {
+                                if let Some(run_id) = selected.current_run_id.as_deref() {
+                                    "{run_id}"
+                                } else {
+                                    span { class: "muted", "Not started" }
+                                }
+                            }
+                        }
+                        div {
+                            dt { "HEALTH" }
+                            dd {
+                                if selected.health_flags.is_empty() {
+                                    span { class: "health-ok", "HEALTHY" }
+                                } else {
+                                    span { class: "health-warning", "{selected_health_label}" }
+                                }
+                            }
+                        }
+                    }
+                    p { class: "inspector-note",
+                        "Contract、受け入れ基準、依存関係はTask detail projectionの接続後に表示されます。"
+                    }
+                }
+            } else if has_rows {
+                div { class: "board-hint",
+                    span { "↗" }
+                    p {
+                        strong { "Select a task to inspect it" }
+                        "Task名または行を選択すると、状態と実行情報を確認できます。"
+                    }
+                }
+            }
         }
     }
 }
@@ -375,6 +620,8 @@ fn task_matches_filter(row: &TaskRowView, filter: TaskFilter) -> bool {
             row.run_status.as_deref(),
             Some("PREPARING" | "AGENT_RUNNING" | "LOCAL_CHECKING")
         ),
+        TaskFilter::Queued => row.run_status.as_deref() == Some("QUEUED"),
+        TaskFilter::DependencyBlocked => row.task_status == "WAITING_DEPENDENCY",
         TaskFilter::Failed => row.run_status.as_deref() == Some("FAILED"),
         TaskFilter::HumanWait => matches!(
             row.run_status.as_deref(),

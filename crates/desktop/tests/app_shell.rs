@@ -1,7 +1,9 @@
 use gameforge_application::{
     AppShellContext, ConnectionState, DevelopmentBoardRecord, compose_app_shell,
 };
-use gameforge_desktop::{Route, TaskFilter, UiAction, UiState, reduce_ui_state, render_app};
+use gameforge_desktop::{
+    ColorTheme, Route, TaskFilter, UiAction, UiState, reduce_ui_state, render_app,
+};
 
 fn view(
     connection: ConnectionState,
@@ -34,6 +36,17 @@ fn row() -> DevelopmentBoardRecord {
     }
 }
 
+fn runnable_row() -> DevelopmentBoardRecord {
+    DevelopmentBoardRecord {
+        task_id: "TASK-READY".to_owned(),
+        title: "砂の描画を追加".to_owned(),
+        task_status: "READY".to_owned(),
+        current_run_id: None,
+        run_status: None,
+        health_flags: Vec::new(),
+    }
+}
+
 #[test]
 fn renders_application_shell_and_development_board_from_view_dto() {
     let html = render_app(&view(ConnectionState::Connected, vec![row()]));
@@ -45,6 +58,24 @@ fn renders_application_shell_and_development_board_from_view_dto() {
     assert!(html.contains("AGENT_RUNNING"));
     assert!(html.contains("Inbox"));
     assert!(html.contains("接続中"));
+    assert!(html.contains("brand-symbol"));
+    assert!(html.contains("gameforge"));
+    assert!(html.contains("BUILD CONTROL"));
+    assert!(html.contains("aria-current=\"page\""));
+    assert!(html.contains("Switch to night mode"));
+    assert!(html.contains("PROJECTION · REV 42"));
+}
+
+#[test]
+fn emphasizes_the_next_runnable_task_and_exposes_task_inspection() {
+    let html = render_app(&view(ConnectionState::Connected, vec![runnable_row()]));
+
+    assert!(html.contains("NEXT ACTION"));
+    assert!(html.contains("TASK-READY · 砂の描画を追加"));
+    assert!(html.contains("Queue Task"));
+    assert!(html.contains("Open task details"));
+    assert!(html.contains("Select a task to inspect it"));
+    assert!(html.contains("Filter by RUNNABLE"));
 }
 
 #[test]
@@ -67,8 +98,10 @@ fn reducer_keeps_navigation_filter_and_selection_as_local_ui_state() {
     let state = reduce_ui_state(state, &UiAction::Navigate(Route::Inbox));
     let state = reduce_ui_state(state, &UiAction::SetTaskFilter(TaskFilter::Running));
     let state = reduce_ui_state(state, &UiAction::SelectTask(Some("TASK-001".to_owned())));
+    let state = reduce_ui_state(state, &UiAction::ToggleTheme);
 
     assert_eq!(state.route, Route::Inbox);
     assert_eq!(state.task_filter, TaskFilter::Running);
     assert_eq!(state.selected_task_id.as_deref(), Some("TASK-001"));
+    assert_eq!(state.color_theme, ColorTheme::Night);
 }
