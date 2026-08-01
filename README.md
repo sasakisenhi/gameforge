@@ -1,6 +1,6 @@
 # gameforgo
 
-AI並列ゲーム開発コントロールプレーンの実装です。現在は設計資料のMilestone 0と、最初のCLI縦切りを実装しています。
+AI並列ゲーム開発コントロールプレーンの実装です。設計資料のMilestone 0と、Dioxus Nativeによる最初のデスクトップ縦切りを実装しています。
 
 ## 実装済み
 
@@ -12,6 +12,19 @@ AI並列ゲーム開発コントロールプレーンの実装です。現在は
 - MarkdownとEvent Journalから再構築できるSQLite Development Board projection
 - project root単位のOS Writer lockとprotocol version検査
 - 共通bootstrapを使用するheadless CLI
+- Application層が所有する型付きView DTOとrevision付きCommand変換
+- Dioxus NativeのApplication Shell、Development Board、切断時の読み取り専用表示
+- GUI起動中にWriter Leaseを保持するProject Session
+
+## Desktop
+
+サンプルプロジェクトのRead Modelを再構築し、Development Boardをネイティブウィンドウで開きます。
+
+```console
+cargo run -p gameforgo-desktop -- examples/powder-game
+```
+
+画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Coordinatorへ送信する処理は次の縦切りで接続します。
 
 ## CLI
 
@@ -44,4 +57,3 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 ```
-
