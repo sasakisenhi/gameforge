@@ -127,6 +127,7 @@ impl TaskRun {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskRunCommand {
     Prepare,
+    DeferPreparation,
     StartAgent {
         has_resource_lease: bool,
         has_worktree_lease: bool,
@@ -155,6 +156,7 @@ impl TaskRunCommand {
     const fn name(&self) -> &'static str {
         match self {
             Self::Prepare => "Prepare",
+            Self::DeferPreparation => "DeferPreparation",
             Self::StartAgent { .. } => "StartAgent",
             Self::RequireInput => "RequireInput",
             Self::ResumeAfterInput => "ResumeAfterInput",
@@ -171,6 +173,7 @@ impl TaskRunCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskRunEvent {
     PreparationStarted,
+    PreparationDeferred,
     AgentStarted,
     InputRequired,
     InputProvided,
@@ -188,6 +191,9 @@ pub fn decide_task_run(
 ) -> Result<Vec<TaskRunEvent>, DomainError> {
     let event = match (&run.status, &command) {
         (TaskRunStatus::Queued, TaskRunCommand::Prepare) => TaskRunEvent::PreparationStarted,
+        (TaskRunStatus::Preparing, TaskRunCommand::DeferPreparation) => {
+            TaskRunEvent::PreparationDeferred
+        }
         (
             TaskRunStatus::Preparing,
             TaskRunCommand::StartAgent {
@@ -277,6 +283,7 @@ pub fn decide_task_run(
 pub fn evolve_task_run(mut run: TaskRun, event: &TaskRunEvent) -> TaskRun {
     match event {
         TaskRunEvent::PreparationStarted => run.status = TaskRunStatus::Preparing,
+        TaskRunEvent::PreparationDeferred => run.status = TaskRunStatus::Queued,
         TaskRunEvent::AgentStarted
         | TaskRunEvent::InputProvided
         | TaskRunEvent::DecisionProvided => run.status = TaskRunStatus::AgentRunning,
