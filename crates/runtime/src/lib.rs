@@ -64,7 +64,7 @@ pub enum CoordinatorError {
     Io(String),
     MetadataMissing { path: PathBuf },
     MetadataInvalid { path: PathBuf },
-    AlreadyOwned { owner: Option<CoordinatorMetadata> },
+    AlreadyOwned { owner: CoordinatorMetadata },
 }
 
 impl fmt::Display for CoordinatorError {
@@ -85,14 +85,11 @@ impl fmt::Display for CoordinatorError {
                 "coordinator holds the writer lock but metadata is invalid: {}",
                 path.display()
             ),
-            Self::AlreadyOwned { owner: Some(owner) } => write!(
+            Self::AlreadyOwned { owner } => write!(
                 formatter,
                 "project writer is already owned by {} (pid {})",
                 owner.instance_id, owner.process_id
             ),
-            Self::AlreadyOwned { owner: None } => {
-                formatter.write_str("project writer is already owned")
-            }
         }
     }
 }
@@ -139,7 +136,7 @@ impl ProjectWriterLease {
         if let Err(error) = lock_file.try_lock() {
             if matches!(error, std::fs::TryLockError::WouldBlock) {
                 let owner = read_locked_metadata(&metadata_path, &project_root)?;
-                return Err(CoordinatorError::AlreadyOwned { owner: Some(owner) });
+                return Err(CoordinatorError::AlreadyOwned { owner });
             }
             let std::fs::TryLockError::Error(error) = error else {
                 unreachable!("WouldBlock was handled above")
