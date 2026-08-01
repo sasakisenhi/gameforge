@@ -14,6 +14,7 @@ use gameforge_application::{
 };
 use gameforge_bootstrap::{BootstrapError, CommandContext, ProjectSession, start_project};
 use gameforge_desktop::{App, CommandResult};
+use gameforge_runtime::ScheduleConfig;
 
 static INITIAL_VIEW: OnceLock<AppShellView> = OnceLock::new();
 static PROJECT_SESSION: OnceLock<Mutex<ProjectSession>> = OnceLock::new();
@@ -36,9 +37,12 @@ fn run() -> Result<(), BootstrapError> {
         .unwrap_or("GameForge Project")
         .to_owned();
     let coordinator_id = format!("desktop-{}", std::process::id());
-    let session = start_project(&project_root, &coordinator_id)?;
-    let snapshot = session.snapshot().clone();
+    let mut session = start_project(&project_root, &coordinator_id)?;
     let main_commit = resolve_main_commit(&project_root);
+    let snapshot = session.run_scheduler(
+        next_command_context(&main_commit, "startup-scheduler"),
+        single_run_config(),
+    )?;
     let view = compose_app_shell(
         AppShellContext {
             project_name,
@@ -82,16 +86,7 @@ fn execute_application_command(command: ApplicationCommand) -> CommandResult {
         return CommandResult::Failed("初期Viewが利用できません".to_owned());
     };
     let occurred_at = current_timestamp();
-    let context = CommandContext {
-        command_id: format!(
-            "desktop-{}-{}",
-            std::process::id(),
-            NEXT_COMMAND.fetch_add(1, Ordering::Relaxed)
-        ),
-        actor: format!("desktop-{}", std::process::id()),
-        occurred_at: occurred_at.clone(),
-        base_commit: initial_view.main_commit.clone(),
-    };
+    let context = next_command_context(&initial_view.main_commit, "client-command");
     let Some(session) = PROJECT_SESSION.get() else {
         return CommandResult::Failed("Project Sessionが利用できません".to_owned());
     };
@@ -99,9 +94,20 @@ fn execute_application_command(command: ApplicationCommand) -> CommandResult {
         .lock()
         .map_err(|_| "Project Sessionのロックが破損しました".to_owned())
         .and_then(|mut session| {
-            session
+            let should_schedule = matches!(command, ApplicationCommand::QueueTaskRun { .. });
+            let snapshot = session
                 .execute(context, command)
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            if should_schedule {
+                session
+                    .run_scheduler(
+                        next_command_context(&initial_view.main_commit, "scheduler-tick"),
+                        single_run_config(),
+                    )
+                    .map_err(|error| error.to_string())
+            } else {
+                Ok(snapshot)
+            }
         }) {
         Ok(snapshot) => snapshot,
         Err(error) => return CommandResult::Failed(error),
@@ -121,6 +127,25 @@ fn execute_application_command(command: ApplicationCommand) -> CommandResult {
         },
         snapshot.development_board,
     )))
+}
+
+fn next_command_context(base_commit: &str, operation: &str) -> CommandContext {
+    CommandContext {
+        command_id: format!(
+            "desktop-{}-{operation}-{}",
+            std::process::id(),
+            NEXT_COMMAND.fetch_add(1, Ordering::Relaxed)
+        ),
+        actor: format!("desktop-{}", std::process::id()),
+        occurred_at: current_timestamp(),
+        base_commit: base_commit.to_owned(),
+    }
+}
+
+const fn single_run_config() -> ScheduleConfig {
+    ScheduleConfig {
+        max_concurrent_task_runs: 1,
+    }
 }
 
 fn resolve_main_commit(project_root: &Path) -> String {
