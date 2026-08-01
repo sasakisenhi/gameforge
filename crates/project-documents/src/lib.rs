@@ -44,6 +44,7 @@ impl fmt::Display for DocumentError {
 
 impl std::error::Error for DocumentError {}
 
+/// A reason why one changed path violates a task contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangedPathViolation {
     InvalidRelativePath { path: String },
@@ -92,6 +93,7 @@ impl fmt::Display for ChangedPathViolation {
     }
 }
 
+/// All changed path violations found in one validation pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangedPathValidationError {
     violations: Vec<ChangedPathViolation>,
@@ -373,6 +375,11 @@ pub fn validate_task_documents(documents: &[TaskDocument]) -> Result<Vec<TaskId>
         .map_err(|error| DocumentError::InvalidTaskGraph(error.to_string()))
 }
 
+/// Validates all changed paths against a task contract.
+///
+/// Forbidden patterns take priority over allowed and test patterns. Violations
+/// are returned in lexicographic path order instead of stopping at the first
+/// invalid path.
 pub fn validate_changed_paths<I, P>(
     document: &TaskDocument,
     changed_paths: I,

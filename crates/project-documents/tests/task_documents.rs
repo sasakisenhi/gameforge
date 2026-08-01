@@ -148,3 +148,73 @@ fn double_star_matches_path_segments_recursively() {
     )
     .unwrap();
 }
+
+#[test]
+fn accepts_changed_paths_matched_by_test_paths() {
+    let task = load_task_document(&task_document("TASK-001", " []")).unwrap();
+
+    validate_changed_paths(&task, ["crates/game_logic/tests/sand/falls.rs"]).unwrap();
+}
+
+#[test]
+fn forbidden_patterns_take_priority_over_allowed_patterns() {
+    let source = task_document("TASK-001", " []")
+        .replacen("crates/game_logic/src/sand/**", "crates/**", 1)
+        .replacen(
+            "  - crates/game_runtime/**",
+            "  - crates/game_runtime/**\n  - crates/*/src/**",
+            1,
+        );
+    let task = load_task_document(&source).unwrap();
+
+    let error = validate_changed_paths(&task, ["crates/game_runtime/src/lib.rs"]).unwrap_err();
+
+    assert_eq!(
+        error.violations(),
+        [ChangedPathViolation::ForbiddenPath {
+            path: "crates/game_runtime/src/lib.rs".to_owned(),
+            pattern: "crates/*/src/**".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn reports_every_violation_in_deterministic_path_order() {
+    let task = load_task_document(&task_document("TASK-001", " []")).unwrap();
+
+    let error = validate_changed_paths(
+        &task,
+        [
+            "outside/z.rs",
+            "crates/game_logic/tests/sand/falls.rs",
+            "crates/game_runtime/src/lib.rs",
+            "/absolute.rs",
+            "another/file.rs",
+            "../escape.rs",
+            "crates/game_logic/src/sand/rules.rs",
+        ],
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.into_violations(),
+        [
+            ChangedPathViolation::InvalidRelativePath {
+                path: "../escape.rs".to_owned(),
+            },
+            ChangedPathViolation::InvalidRelativePath {
+                path: "/absolute.rs".to_owned(),
+            },
+            ChangedPathViolation::OutsideAllowedAndTestPaths {
+                path: "another/file.rs".to_owned(),
+            },
+            ChangedPathViolation::ForbiddenPath {
+                path: "crates/game_runtime/src/lib.rs".to_owned(),
+                pattern: "crates/game_runtime/**".to_owned(),
+            },
+            ChangedPathViolation::OutsideAllowedAndTestPaths {
+                path: "outside/z.rs".to_owned(),
+            },
+        ]
+    );
+}
