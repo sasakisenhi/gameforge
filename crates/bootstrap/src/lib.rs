@@ -6,7 +6,7 @@ mod events;
 mod model;
 mod project;
 
-pub use coordinator::ProjectCoordinator;
+pub use coordinator::{ProjectCoordinator, UnavailableLocalVerification};
 pub use model::{BootstrapError, CommandContext, ProjectSnapshot, ProjectValidation};
 pub use project::{rebuild_project, start_project, validate_project};
 
@@ -18,7 +18,8 @@ use events::{
 use std::collections::BTreeMap;
 
 use gameforge_application::{
-    ApplicationCommand, RunExecutionPort, RunLaunchOutcome, RunLaunchRequest,
+    ApplicationCommand, LocalVerificationRequest, RunExecutionPort, RunLaunchOutcome,
+    RunLaunchRequest,
 };
 use gameforge_domain::{
     CommitSha, ContractRevision, TaskId, TaskRun, TaskRunCommand, TaskRunEvent, TaskRunId,
@@ -28,7 +29,9 @@ use gameforge_event_journal::{
     AggregateRef, EventEnvelope, EventHeader, EventJournal, SUPPORTED_SCHEMA_VERSION,
 };
 use gameforge_persistence::ProjectionStore;
-use gameforge_project_documents::{TaskDocument, TaskDocumentStatus};
+use gameforge_project_documents::{
+    TaskDocument, TaskDocumentStatus, is_test_path, validate_changed_paths,
+};
 use gameforge_runtime::{
     ProjectWriterLease, QueuedRun, ScheduleConfig, ScheduleSnapshot, plan_schedule,
 };
@@ -321,6 +324,8 @@ impl ProjectSession {
         context: &CommandContext,
         run_id: &str,
         agent_session_id: &str,
+        red_evidence_present: bool,
+        green_evidence_present: bool,
     ) -> Result<ProjectSnapshot, BootstrapError> {
         validate_command_context(context)?;
         validate_required("agent_session_id", agent_session_id)?;
@@ -334,6 +339,14 @@ impl ProjectSession {
         }
         let mut payload = BTreeMap::new();
         payload.insert("agent_session_id".to_owned(), agent_session_id.to_owned());
+        payload.insert(
+            "red_evidence_present".to_owned(),
+            red_evidence_present.to_string(),
+        );
+        payload.insert(
+            "green_evidence_present".to_owned(),
+            green_evidence_present.to_string(),
+        );
         let event = execution_update_event(context, &run, &latest, "LOCAL_CHECKING", payload)?;
         self.journal
             .append(&event)
@@ -343,6 +356,163 @@ impl ProjectSession {
             .map_err(|error| BootstrapError::Projection(error.to_string()))?;
         self.refresh_snapshot()?;
         Ok(self.snapshot.clone())
+    }
+
+    pub fn local_verification_request(
+        &self,
+        run_id: &str,
+    ) -> Result<LocalVerificationRequest, BootstrapError> {
+        let (run, latest) = self.task_run_history(run_id)?;
+        if latest.payload().get("state").map(String::as_str) != Some("LOCAL_CHECKING") {
+            return Err(BootstrapError::RunStateConflict {
+                run_id: run_id.to_owned(),
+                expected: "LOCAL_CHECKING",
+                actual: latest.payload().get("state").cloned(),
+            });
+        }
+        let worktree_path = self
+            .journal
+            .events()
+            .iter()
+            .rev()
+            .filter(|event| event.header().aggregate.aggregate_id() == run_id)
+            .find_map(|event| event.payload().get("worktree_lease_id"))
+            .cloned()
+            .ok_or_else(|| {
+                BootstrapError::Journal(format!("Task Run {run_id} has no recorded worktree lease"))
+            })?;
+        Ok(LocalVerificationRequest {
+            task_run_id: run_id.to_owned(),
+            task_id: run.task_id().as_str().to_owned(),
+            base_commit: run.base_commit().as_str().to_owned(),
+            worktree_path,
+        })
+    }
+
+    pub fn record_local_verification_passed(
+        &mut self,
+        context: &CommandContext,
+        run_id: &str,
+        head_commit: &str,
+        changed_paths: &[String],
+        completed_checks: &[String],
+        final_suite_passed: bool,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        validate_command_context(context)?;
+        validate_required("head_commit", head_commit)?;
+        if completed_checks.is_empty() {
+            return Err(BootstrapError::InvalidCommand(
+                "completed_checks must not be empty".to_owned(),
+            ));
+        }
+        let (run, latest) = self.task_run_history(run_id)?;
+        if latest.payload().get("state").map(String::as_str) != Some("LOCAL_CHECKING") {
+            return Err(BootstrapError::RunStateConflict {
+                run_id: run_id.to_owned(),
+                expected: "LOCAL_CHECKING",
+                actual: latest.payload().get("state").cloned(),
+            });
+        }
+        let document = self.task_document_for_run(&run)?;
+        if let Err(error) = validate_changed_paths(document, changed_paths) {
+            return self.fail_local_verification(
+                context,
+                &run,
+                &latest,
+                &error.to_string(),
+                Some("SCOPE_VIOLATION"),
+            );
+        }
+
+        let behavior_changed = changed_paths
+            .iter()
+            .any(|path| !is_test_path(document, path));
+        let red_evidence_present = boolean_payload(&latest, "red_evidence_present")?;
+        let agent_green_evidence = boolean_payload(&latest, "green_evidence_present")?;
+        let green_evidence_present =
+            agent_green_evidence || (red_evidence_present && final_suite_passed);
+        let head_commit = CommitSha::new(head_commit)
+            .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        let command = TaskRunCommand::CompleteLocalChecks {
+            required_checks_passed: true,
+            scope_check_passed: true,
+            final_suite_passed,
+            behavior_changed,
+            red_evidence_present,
+            green_evidence_present,
+            head_commit,
+        };
+        let domain_events = match decide_task_run(&run, command) {
+            Ok(events) => events,
+            Err(error) => {
+                let health_flag = match error {
+                    gameforge_domain::DomainError::MissingTddEvidence => {
+                        Some("TDD_SEQUENCE_VIOLATION")
+                    }
+                    _ => None,
+                };
+                return self.fail_local_verification(
+                    context,
+                    &run,
+                    &latest,
+                    &error.to_string(),
+                    health_flag,
+                );
+            }
+        };
+        let [TaskRunEvent::Succeeded { head_commit }] = domain_events.as_slice() else {
+            return Err(BootstrapError::InvalidCommand(
+                "Local Verification must emit Succeeded".to_owned(),
+            ));
+        };
+
+        let mut payload = BTreeMap::new();
+        payload.insert("head_commit".to_owned(), head_commit.as_str().to_owned());
+        payload.insert("behavior_changed".to_owned(), behavior_changed.to_string());
+        payload.insert(
+            "red_evidence_present".to_owned(),
+            red_evidence_present.to_string(),
+        );
+        payload.insert(
+            "green_evidence_present".to_owned(),
+            green_evidence_present.to_string(),
+        );
+        payload.insert(
+            "changed_path_count".to_owned(),
+            changed_paths.len().to_string(),
+        );
+        for (index, path) in changed_paths.iter().enumerate() {
+            payload.insert(format!("changed_path_{index}"), path.clone());
+        }
+        payload.insert(
+            "completed_check_count".to_owned(),
+            completed_checks.len().to_string(),
+        );
+        for (index, check) in completed_checks.iter().enumerate() {
+            payload.insert(format!("completed_check_{index}"), check.clone());
+        }
+        let event = execution_update_event(context, &run, &latest, "SUCCEEDED", payload)?;
+        self.append_and_project(&event)?;
+        Ok(self.snapshot.clone())
+    }
+
+    pub fn record_local_verification_failed(
+        &mut self,
+        context: &CommandContext,
+        run_id: &str,
+        detail: &str,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        validate_command_context(context)?;
+        validate_required("failure_detail", detail)?;
+        let (run, latest) = self.task_run_history(run_id)?;
+        if latest.payload().get("state").map(String::as_str) != Some("LOCAL_CHECKING") {
+            return Err(BootstrapError::RunStateConflict {
+                run_id: run_id.to_owned(),
+                expected: "LOCAL_CHECKING",
+                actual: latest.payload().get("state").cloned(),
+            });
+        }
+        self.fail_local_verification(context, &run, &latest, detail, None)
     }
 
     pub fn record_agent_failed(
@@ -381,6 +551,67 @@ impl ProjectSession {
             .map_err(|error| BootstrapError::Projection(error.to_string()))?;
         self.refresh_snapshot()?;
         Ok(self.snapshot.clone())
+    }
+
+    fn task_document_for_run(&self, run: &TaskRun) -> Result<&TaskDocument, BootstrapError> {
+        self.documents
+            .iter()
+            .find(|document| {
+                document.id() == run.task_id()
+                    && document.contract_revision() == run.contract_revision()
+            })
+            .ok_or_else(|| {
+                BootstrapError::Document(format!(
+                    "Task Contract revision {} for {} is not loaded",
+                    run.contract_revision().get(),
+                    run.task_id()
+                ))
+            })
+    }
+
+    fn fail_local_verification(
+        &mut self,
+        context: &CommandContext,
+        run: &TaskRun,
+        latest: &EventEnvelope,
+        detail: &str,
+        health_flag: Option<&str>,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        let domain_events = decide_task_run(
+            run,
+            TaskRunCommand::Fail {
+                reason: detail.to_owned(),
+            },
+        )
+        .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        if domain_events
+            != [TaskRunEvent::Failed {
+                reason: detail.to_owned(),
+            }]
+        {
+            return Err(BootstrapError::InvalidCommand(
+                "Local Verification failure must fail the Task Run".to_owned(),
+            ));
+        }
+        let mut payload = BTreeMap::new();
+        payload.insert("failure_detail".to_owned(), detail.to_owned());
+        payload.insert("failure_stage".to_owned(), "LOCAL_VERIFICATION".to_owned());
+        if let Some(flag) = health_flag {
+            payload.insert("health_flag".to_owned(), flag.to_owned());
+        }
+        let event = execution_update_event(context, run, latest, "FAILED", payload)?;
+        self.append_and_project(&event)?;
+        Ok(self.snapshot.clone())
+    }
+
+    fn append_and_project(&mut self, event: &EventEnvelope) -> Result<(), BootstrapError> {
+        self.journal
+            .append(event)
+            .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+        self.projection
+            .apply_event(event)
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+        self.refresh_snapshot()
     }
 
     pub(crate) fn preparing_run_ids(&self) -> Vec<String> {
@@ -738,6 +969,10 @@ impl ProjectSession {
                 Some("AGENT_RUNNING") => TaskRunEvent::AgentStarted,
                 Some("INPUT_REQUIRED") => TaskRunEvent::InputRequired,
                 Some("LOCAL_CHECKING") => TaskRunEvent::LocalChecksStarted,
+                Some("SUCCEEDED") => TaskRunEvent::Succeeded {
+                    head_commit: CommitSha::new(event_payload(event, "head_commit")?)
+                        .map_err(|error| BootstrapError::Journal(error.to_string()))?,
+                },
                 Some("FAILED") => TaskRunEvent::Failed {
                     reason: event
                         .payload()
@@ -874,4 +1109,10 @@ fn validate_required(field: &'static str, value: &str) -> Result<(), BootstrapEr
     } else {
         Ok(())
     }
+}
+
+fn boolean_payload(event: &EventEnvelope, field: &'static str) -> Result<bool, BootstrapError> {
+    event_payload(event, field)?
+        .parse::<bool>()
+        .map_err(|_| BootstrapError::Journal(format!("invalid boolean payload field {field}")))
 }

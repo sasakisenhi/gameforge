@@ -426,6 +426,8 @@ pub enum RunExecutionUpdate {
     Completed {
         task_run_id: String,
         agent_session_id: String,
+        red_evidence_present: bool,
+        green_evidence_present: bool,
     },
     Failed {
         task_run_id: String,
@@ -474,6 +476,7 @@ pub enum LocalVerificationUpdate {
         head_commit: String,
         changed_paths: Vec<String>,
         completed_checks: Vec<String>,
+        final_suite_passed: bool,
     },
     Failed {
         task_run_id: String,

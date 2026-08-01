@@ -145,6 +145,8 @@ while read ignored; do :; done
         RunExecutionUpdate::Completed {
             task_run_id: "RUN-TASK-001-1".to_owned(),
             agent_session_id: "thread-1".to_owned(),
+            red_evidence_present: false,
+            green_evidence_present: false,
         }
     );
     assert_eq!(adapter.active_run_count(), 0);

@@ -1,15 +1,31 @@
-use gameforge_application::{ApplicationCommand, RunExecutionPort, RunExecutionUpdate};
+use gameforge_application::{
+    ApplicationCommand, LocalVerificationPort, LocalVerificationUpdate, RunExecutionPort,
+    RunExecutionUpdate,
+};
 use gameforge_runtime::ScheduleConfig;
 
 use crate::{BootstrapError, CommandContext, ProjectSession, ProjectSnapshot};
 
-pub struct ProjectCoordinator<E> {
+pub struct ProjectCoordinator<E, V> {
     session: ProjectSession,
     execution: E,
+    verification: V,
     schedule_config: ScheduleConfig,
 }
 
-impl<E: RunExecutionPort> ProjectCoordinator<E> {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnavailableLocalVerification;
+
+impl LocalVerificationPort for UnavailableLocalVerification {
+    fn start_verification(
+        &mut self,
+        _request: &gameforge_application::LocalVerificationRequest,
+    ) -> Result<(), String> {
+        Err("Local Verification adapter is not configured".to_owned())
+    }
+}
+
+impl<E: RunExecutionPort> ProjectCoordinator<E, UnavailableLocalVerification> {
     #[must_use]
     pub const fn new(
         session: ProjectSession,
@@ -19,6 +35,24 @@ impl<E: RunExecutionPort> ProjectCoordinator<E> {
         Self {
             session,
             execution,
+            verification: UnavailableLocalVerification,
+            schedule_config,
+        }
+    }
+}
+
+impl<E: RunExecutionPort, V: LocalVerificationPort> ProjectCoordinator<E, V> {
+    #[must_use]
+    pub const fn with_verification(
+        session: ProjectSession,
+        execution: E,
+        verification: V,
+        schedule_config: ScheduleConfig,
+    ) -> Self {
+        Self {
+            session,
+            execution,
+            verification,
             schedule_config,
         }
     }
@@ -52,9 +86,10 @@ impl<E: RunExecutionPort> ProjectCoordinator<E> {
 
         self.session.execute(context.clone(), command)?;
         if let Some(run_id) = cancelled_run {
-            self.execution
-                .cancel_run(&run_id)
-                .map_err(BootstrapError::RunExecution)?;
+            let execution_result = self.execution.cancel_run(&run_id);
+            let verification_result = self.verification.cancel_verification(&run_id);
+            execution_result.map_err(BootstrapError::RunExecution)?;
+            verification_result.map_err(BootstrapError::LocalVerification)?;
         }
         if let Some((run_id, request_id, answer)) = answered_input {
             self.execution
@@ -71,17 +106,32 @@ impl<E: RunExecutionPort> ProjectCoordinator<E> {
                 RunExecutionUpdate::Completed {
                     task_run_id,
                     agent_session_id,
-                } => self.session.record_agent_completed(
-                    &update_context,
-                    &task_run_id,
-                    &agent_session_id,
-                )?,
+                    red_evidence_present,
+                    green_evidence_present,
+                } => {
+                    self.session.record_agent_completed(
+                        &update_context,
+                        &task_run_id,
+                        &agent_session_id,
+                        red_evidence_present,
+                        green_evidence_present,
+                    )?;
+                    let request = self.session.local_verification_request(&task_run_id)?;
+                    if let Err(error) = self.verification.start_verification(&request) {
+                        self.session.record_local_verification_failed(
+                            &update_context.child("start-failed"),
+                            &task_run_id,
+                            &error,
+                        )?;
+                    }
+                }
                 RunExecutionUpdate::Failed {
                     task_run_id,
                     detail,
-                } => self
-                    .session
-                    .record_agent_failed(&update_context, &task_run_id, &detail)?,
+                } => {
+                    self.session
+                        .record_agent_failed(&update_context, &task_run_id, &detail)?;
+                }
                 RunExecutionUpdate::InputRequired {
                     task_run_id,
                     request_id,
@@ -94,8 +144,36 @@ impl<E: RunExecutionPort> ProjectCoordinator<E> {
                         &request_id,
                         &prompt,
                         revision,
-                    )?
+                    )?;
                 }
+            }
+        }
+
+        for (index, update) in self.verification.poll_updates().into_iter().enumerate() {
+            let update_context = context.child(&format!("verification-update-{index}"));
+            match update {
+                LocalVerificationUpdate::Passed {
+                    task_run_id,
+                    head_commit,
+                    changed_paths,
+                    completed_checks,
+                    final_suite_passed,
+                } => self.session.record_local_verification_passed(
+                    &update_context,
+                    &task_run_id,
+                    &head_commit,
+                    &changed_paths,
+                    &completed_checks,
+                    final_suite_passed,
+                )?,
+                LocalVerificationUpdate::Failed {
+                    task_run_id,
+                    detail,
+                } => self.session.record_local_verification_failed(
+                    &update_context,
+                    &task_run_id,
+                    &detail,
+                )?,
             };
         }
 

@@ -470,6 +470,8 @@ fn process_message(
                 MessageOutcome::Update(RunExecutionUpdate::Completed {
                     task_run_id: run_id.to_owned(),
                     agent_session_id: active.agent_session_id.clone(),
+                    red_evidence_present: false,
+                    green_evidence_present: false,
                 })
             } else {
                 let detail = message

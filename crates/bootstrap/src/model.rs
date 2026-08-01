@@ -44,6 +44,7 @@ pub enum BootstrapError {
     Projection(String),
     Coordinator(String),
     RunExecution(String),
+    LocalVerification(String),
     InvalidCommand(String),
     UnsupportedCommand(String),
     CommandIdConflict(String),
@@ -83,6 +84,9 @@ impl fmt::Display for BootstrapError {
             Self::Projection(error) => write!(formatter, "Read Model failed: {error}"),
             Self::Coordinator(error) => write!(formatter, "ProjectCoordinator failed: {error}"),
             Self::RunExecution(error) => write!(formatter, "Run execution failed: {error}"),
+            Self::LocalVerification(error) => {
+                write!(formatter, "Local Verification failed: {error}")
+            }
             Self::InvalidCommand(error) => write!(formatter, "invalid command: {error}"),
             Self::UnsupportedCommand(command) => {
                 write!(formatter, "unsupported command: {command}")
