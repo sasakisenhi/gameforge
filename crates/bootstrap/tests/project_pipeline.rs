@@ -254,6 +254,53 @@ fn stale_projection_or_already_queued_task_is_rejected_without_mutation() {
 }
 
 #[test]
+fn cancel_command_persists_idempotently_and_allows_a_new_run() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    queue(&mut session, "CMD-QUEUE-1", "TASK-001", 0);
+    let command = ApplicationCommand::CancelTaskRun {
+        task_run_id: "RUN-TASK-001-1".to_owned(),
+        expected_projection_revision: 1,
+    };
+
+    let cancelled = session
+        .execute(command_context("CMD-CANCEL-1"), command.clone())
+        .unwrap();
+
+    assert_eq!(cancelled.projection_revision, 2);
+    assert_eq!(cancelled.development_board[0].current_run_id, None);
+    assert_eq!(
+        cancelled.development_board[0].run_status.as_deref(),
+        Some("CANCELLED")
+    );
+    let retried = session
+        .execute(command_context("CMD-CANCEL-1"), command)
+        .unwrap();
+    assert_eq!(retried, cancelled);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 2);
+    assert!(journal.contains("\"state\":\"CANCELLED\""));
+
+    let queued_again = session
+        .execute(
+            command_context("CMD-QUEUE-2"),
+            ApplicationCommand::QueueTaskRun {
+                task_id: "TASK-001".to_owned(),
+                expected_projection_revision: 2,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        queued_again.development_board[0].current_run_id.as_deref(),
+        Some("RUN-TASK-001-2")
+    );
+
+    drop(session);
+    let restarted = start_project(project.path(), "restarted-coordinator").unwrap();
+    assert_eq!(restarted.snapshot(), &queued_again);
+}
+
+#[test]
 fn scheduler_starts_only_the_first_queued_run_and_survives_restart() {
     let project = TempProject::create_with_two_tasks();
     let mut session = start_project(project.path(), "desktop-coordinator").unwrap();

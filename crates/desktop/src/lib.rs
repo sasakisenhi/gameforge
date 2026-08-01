@@ -100,9 +100,13 @@ pub fn execute_board_intent(
         }
     };
     let prepared = command_description(&command);
-    let affected_task_id = match &command {
-        ApplicationCommand::QueueTaskRun { task_id, .. } => Some(task_id.clone()),
-        ApplicationCommand::CancelTaskRun { .. } => None,
+    let target = match &command {
+        ApplicationCommand::QueueTaskRun { task_id, .. } => {
+            CommandTarget::QueueTask(task_id.clone())
+        }
+        ApplicationCommand::CancelTaskRun { task_run_id, .. } => {
+            CommandTarget::CancelRun(task_run_id.clone())
+        }
     };
     match execute(command) {
         CommandResult::Unavailable => CommandEffect {
@@ -111,30 +115,47 @@ pub fn execute_board_intent(
         },
         CommandResult::Applied(updated_view) => {
             let updated_view = *updated_view;
-            let run = updated_view
-                .development
-                .task_rows
-                .iter()
-                .find(|row| Some(&row.task_id) == affected_task_id.as_ref());
-            let run_id = run
-                .and_then(|row| row.current_run_id.as_deref())
-                .unwrap_or("Run ID未確認");
-            let run_status = run
-                .and_then(|row| row.run_status.as_deref())
-                .unwrap_or("状態未確認");
-            CommandEffect {
-                notice: format!(
-                    "Queue登録完了: {run_id} / {run_status} / projection rev {}",
+            let notice = match target {
+                CommandTarget::QueueTask(task_id) => {
+                    let run = updated_view
+                        .development
+                        .task_rows
+                        .iter()
+                        .find(|row| row.task_id == task_id);
+                    let run_id = run
+                        .and_then(|row| row.current_run_id.as_deref())
+                        .unwrap_or("Run ID未確認");
+                    let run_status = run
+                        .and_then(|row| row.run_status.as_deref())
+                        .unwrap_or("状態未確認");
+                    format!(
+                        "Queue登録完了: {run_id} / {run_status} / projection rev {}",
+                        updated_view.projection_revision
+                    )
+                }
+                CommandTarget::CancelRun(run_id) => format!(
+                    "Run取消し完了: {run_id} / CANCELLED / projection rev {}",
                     updated_view.projection_revision
                 ),
+            };
+            CommandEffect {
+                notice,
                 updated_view: Some(updated_view),
             }
         }
         CommandResult::Failed(error) => CommandEffect {
             updated_view: None,
-            notice: format!("Queue登録失敗: {error}"),
+            notice: match target {
+                CommandTarget::QueueTask(_) => format!("Queue登録失敗: {error}"),
+                CommandTarget::CancelRun(_) => format!("Run取消し失敗: {error}"),
+            },
         },
     }
+}
+
+enum CommandTarget {
+    QueueTask(String),
+    CancelRun(String),
 }
 
 #[must_use]
@@ -428,6 +449,7 @@ fn development_board(
         let selection_id = row.task_id.clone();
         let link_selection_id = selection_id.clone();
         let queue_id = row.task_id.clone();
+        let cancel_id = row.current_run_id.clone();
         let command_view = view.clone();
         let mut state_signal = ui_state;
         let mut link_state_signal = ui_state;
@@ -435,6 +457,7 @@ fn development_board(
         let mut view_signal = app_view;
         let command_callback = on_command;
         let unavailable_reason = row.queue_unavailable_reason.clone().unwrap_or_default();
+        let cancel_unavailable_reason = row.cancel_unavailable_reason.clone().unwrap_or_default();
         let health_label = row.health_flags.join(", ");
         rsx! {
             tr {
@@ -481,26 +504,50 @@ fn development_board(
                     }
                 }
                 td { class: "actions",
-                    button {
-                        class: "queue-button",
-                        disabled: !row.can_queue,
-                        title: "{unavailable_reason}",
-                        onclick: move |event| {
-                            event.stop_propagation();
-                            let effect = execute_board_intent(
-                                &command_view,
-                                BoardIntent::QueueTask { task_id: queue_id.clone() },
-                                |command| command_callback.map_or(
-                                    CommandResult::Unavailable,
-                                    |callback| callback.call(command),
-                                ),
-                            );
-                            if let Some(updated_view) = effect.updated_view {
-                                view_signal.set(updated_view);
-                            }
-                            notice_signal.set(Some(effect.notice));
-                        },
-                        "Queue Task"
+                    if let Some(run_id) = cancel_id {
+                        button {
+                            class: "cancel-button",
+                            disabled: !row.can_cancel,
+                            title: "{cancel_unavailable_reason}",
+                            onclick: move |event| {
+                                event.stop_propagation();
+                                let effect = execute_board_intent(
+                                    &command_view,
+                                    BoardIntent::CancelRun { task_run_id: run_id.clone() },
+                                    |command| command_callback.map_or(
+                                        CommandResult::Unavailable,
+                                        |callback| callback.call(command),
+                                    ),
+                                );
+                                if let Some(updated_view) = effect.updated_view {
+                                    view_signal.set(updated_view);
+                                }
+                                notice_signal.set(Some(effect.notice));
+                            },
+                            "Cancel Run"
+                        }
+                    } else {
+                        button {
+                            class: "queue-button",
+                            disabled: !row.can_queue,
+                            title: "{unavailable_reason}",
+                            onclick: move |event| {
+                                event.stop_propagation();
+                                let effect = execute_board_intent(
+                                    &command_view,
+                                    BoardIntent::QueueTask { task_id: queue_id.clone() },
+                                    |command| command_callback.map_or(
+                                        CommandResult::Unavailable,
+                                        |callback| callback.call(command),
+                                    ),
+                                );
+                                if let Some(updated_view) = effect.updated_view {
+                                    view_signal.set(updated_view);
+                                }
+                                notice_signal.set(Some(effect.notice));
+                            },
+                            "Queue Task"
+                        }
                     }
                 }
             }

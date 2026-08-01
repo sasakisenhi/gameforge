@@ -42,6 +42,8 @@ pub struct TaskRowView {
     pub health_flags: Vec<String>,
     pub can_queue: bool,
     pub queue_unavailable_reason: Option<String>,
+    pub can_cancel: bool,
+    pub cancel_unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -124,6 +126,30 @@ pub fn compose_app_shell(
                     format!("Task状態 {} ではQueueできません", record.task_status)
                 }
             });
+            let run_is_cancellable = record.current_run_id.is_some()
+                && matches!(
+                    run_status,
+                    Some(
+                        "QUEUED"
+                            | "PREPARING"
+                            | "AGENT_RUNNING"
+                            | "INPUT_REQUIRED"
+                            | "DECISION_REQUIRED"
+                            | "LOCAL_CHECKING"
+                    )
+                );
+            let can_cancel = mutations_available && run_is_cancellable;
+            let cancel_unavailable_reason =
+                (!can_cancel && record.current_run_id.is_some()).then(|| {
+                    if mutations_available {
+                        format!(
+                            "Run状態 {} では取消しできません",
+                            run_status.unwrap_or("未確認")
+                        )
+                    } else {
+                        "Coordinatorへ接続し、最新Projectionを取得してください".to_owned()
+                    }
+                });
 
             TaskRowView {
                 task_id: record.task_id,
@@ -134,6 +160,8 @@ pub fn compose_app_shell(
                 health_flags: record.health_flags,
                 can_queue,
                 queue_unavailable_reason,
+                can_cancel,
+                cancel_unavailable_reason,
             }
         })
         .collect();
