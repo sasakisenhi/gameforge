@@ -352,7 +352,7 @@ fn supervisor_records_the_request_before_starting_and_advances_the_run() {
 
     let supervisor_context = command_context("CMD-SUPERVISOR-1");
     let started = session
-        .run_supervisor(supervisor_context.clone(), "RUN-TASK-001-1", &mut execution)
+        .run_supervisor(&supervisor_context, "RUN-TASK-001-1", &mut execution)
         .unwrap();
 
     assert_eq!(execution.calls.len(), 1);
@@ -373,7 +373,7 @@ fn supervisor_records_the_request_before_starting_and_advances_the_run() {
     assert!(journal.contains("agent-session-1"));
 
     let retried = session
-        .run_supervisor(supervisor_context, "RUN-TASK-001-1", &mut execution)
+        .run_supervisor(&supervisor_context, "RUN-TASK-001-1", &mut execution)
         .unwrap();
     assert_eq!(retried, started);
     assert_eq!(execution.calls.len(), 1);
@@ -397,7 +397,7 @@ fn supervisor_returns_a_run_to_queue_when_resources_are_unavailable() {
 
     let deferred = session
         .run_supervisor(
-            command_context("CMD-SUPERVISOR-1"),
+            &command_context("CMD-SUPERVISOR-1"),
             "RUN-TASK-001-1",
             &mut execution,
         )
@@ -434,7 +434,7 @@ fn deferred_run_can_be_scheduled_again_and_started() {
     let journal_path = project.path().join(".game-dev/events/events.jsonl");
     session
         .run_supervisor(
-            command_context("CMD-SUPERVISOR-1"),
+            &command_context("CMD-SUPERVISOR-1"),
             "RUN-TASK-001-1",
             &mut FakeRunExecution::deferred(journal_path.clone()),
         )
@@ -455,7 +455,7 @@ fn deferred_run_can_be_scheduled_again_and_started() {
 
     let started = session
         .run_supervisor(
-            command_context("CMD-SUPERVISOR-2"),
+            &command_context("CMD-SUPERVISOR-2"),
             "RUN-TASK-001-1",
             &mut FakeRunExecution::started(journal_path),
         )

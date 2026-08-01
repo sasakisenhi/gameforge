@@ -209,9 +209,9 @@ pub struct RunLaunchRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartedRun {
-    resource_lease_id: String,
-    worktree_lease_id: String,
-    agent_session_id: String,
+    resource_lease: String,
+    worktree_lease: String,
+    agent_session: String,
 }
 
 impl StartedRun {
@@ -221,34 +221,31 @@ impl StartedRun {
         agent_session_id: impl Into<String>,
     ) -> Result<Self, RunExecutionContractError> {
         Ok(Self {
-            resource_lease_id: required_execution_value(
+            resource_lease: required_execution_value(
                 "resource_lease_id",
                 resource_lease_id.into(),
             )?,
-            worktree_lease_id: required_execution_value(
+            worktree_lease: required_execution_value(
                 "worktree_lease_id",
                 worktree_lease_id.into(),
             )?,
-            agent_session_id: required_execution_value(
-                "agent_session_id",
-                agent_session_id.into(),
-            )?,
+            agent_session: required_execution_value("agent_session_id", agent_session_id.into())?,
         })
     }
 
     #[must_use]
     pub fn resource_lease_id(&self) -> &str {
-        &self.resource_lease_id
+        &self.resource_lease
     }
 
     #[must_use]
     pub fn worktree_lease_id(&self) -> &str {
-        &self.worktree_lease_id
+        &self.worktree_lease
     }
 
     #[must_use]
     pub fn agent_session_id(&self) -> &str {
-        &self.agent_session_id
+        &self.agent_session
     }
 }
 

@@ -112,12 +112,12 @@ impl ProjectSession {
 
     pub fn run_supervisor(
         &mut self,
-        context: CommandContext,
+        context: &CommandContext,
         run_id: &str,
         execution: &mut impl RunExecutionPort,
     ) -> Result<ProjectSnapshot, BootstrapError> {
-        validate_command_context(&context)?;
-        if let Some(previous) = self.supervisor_retry(&context, run_id)? {
+        validate_command_context(context)?;
+        if let Some(previous) = self.supervisor_retry(context, run_id)? {
             return Ok(previous);
         }
 
@@ -141,7 +141,7 @@ impl ProjectSession {
             contract_revision: prepared_run.contract_revision().get(),
             base_commit: prepared_run.base_commit().as_str().to_owned(),
         };
-        let requested = start_requested_event(&context, &request, &preparation)?;
+        let requested = start_requested_event(context, &request, &preparation)?;
         self.journal
             .append(&requested)
             .map_err(|error| BootstrapError::Journal(error.to_string()))?;
@@ -195,7 +195,7 @@ impl ProjectSession {
         }
 
         let state_changed = supervisor_state_event(
-            &context,
+            context,
             &request,
             &preparation,
             &requested,
