@@ -514,6 +514,75 @@ fn deferred_run_can_be_scheduled_again_and_started() {
     assert_eq!(started.projection_revision, 7);
 }
 
+#[test]
+fn input_request_is_persisted_in_the_inbox_and_survives_restart() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    queue(&mut session, "CMD-QUEUE-1", "TASK-001", 0);
+    session
+        .run_scheduler(
+            command_context("CMD-SCHEDULER-1"),
+            ScheduleConfig {
+                max_concurrent_task_runs: 1,
+            },
+        )
+        .unwrap();
+    session
+        .run_supervisor(
+            &command_context("CMD-SUPERVISOR-1"),
+            "RUN-TASK-001-1",
+            &mut FakeRunExecution::started(project.path().join(".game-dev/events/events.jsonl")),
+        )
+        .unwrap();
+    let context = command_context("CMD-INPUT-1");
+
+    let waiting = session
+        .record_input_required(
+            context.clone(),
+            "RUN-TASK-001-1",
+            "INPUT-001",
+            "砂が左右どちらにも落ちられる場合の優先方向を選んでください",
+            4,
+        )
+        .unwrap();
+
+    assert_eq!(waiting.projection_revision, 5);
+    assert_eq!(
+        waiting.development_board[0].run_status.as_deref(),
+        Some("INPUT_REQUIRED")
+    );
+    assert_eq!(waiting.inbox.len(), 1);
+    assert_eq!(waiting.inbox[0].request_id, "INPUT-001");
+    assert_eq!(waiting.inbox[0].task_id, "TASK-001");
+    assert_eq!(waiting.inbox[0].task_run_id, "RUN-TASK-001-1");
+    assert_eq!(waiting.inbox[0].request_kind, "INPUT");
+    assert_eq!(
+        waiting.inbox[0].prompt,
+        "砂が左右どちらにも落ちられる場合の優先方向を選んでください"
+    );
+    assert_eq!(waiting.inbox[0].status, "PENDING");
+    assert_eq!(waiting.inbox[0].requested_at, context.occurred_at);
+
+    let retried = session
+        .record_input_required(
+            context,
+            "RUN-TASK-001-1",
+            "INPUT-001",
+            "砂が左右どちらにも落ちられる場合の優先方向を選んでください",
+            4,
+        )
+        .unwrap();
+    assert_eq!(retried, waiting);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 5);
+    assert!(journal.contains("INPUT_REQUIRED"));
+    assert!(journal.contains("INPUT-001"));
+
+    drop(session);
+    let restarted = start_project(project.path(), "restarted-coordinator").unwrap();
+    assert_eq!(restarted.snapshot(), &waiting);
+}
+
 struct FakeRunExecution {
     journal_path: PathBuf,
     outcome: Option<RunLaunchOutcome>,

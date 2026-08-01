@@ -33,6 +33,17 @@ pub struct DevelopmentBoardRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxItemRecord {
+    pub request_id: String,
+    pub task_id: String,
+    pub task_run_id: String,
+    pub request_kind: String,
+    pub prompt: String,
+    pub status: String,
+    pub requested_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRowView {
     pub task_id: String,
     pub title: String,
@@ -65,6 +76,24 @@ pub struct DevelopmentBoardView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxItemView {
+    pub request_id: String,
+    pub task_id: String,
+    pub task_run_id: String,
+    pub request_kind: String,
+    pub prompt: String,
+    pub status: String,
+    pub requested_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxView {
+    pub projection_revision: u64,
+    pub pending: usize,
+    pub items: Vec<InboxItemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppShellView {
     pub project_name: String,
     pub project_root: String,
@@ -76,12 +105,22 @@ pub struct AppShellView {
     pub inbox_count: usize,
     pub max_concurrent_task_runs: usize,
     pub development: DevelopmentBoardView,
+    pub inbox: InboxView,
 }
 
 #[must_use]
 pub fn compose_app_shell(
     context: AppShellContext,
     records: Vec<DevelopmentBoardRecord>,
+) -> AppShellView {
+    compose_app_shell_with_inbox(context, records, Vec::new())
+}
+
+#[must_use]
+pub fn compose_app_shell_with_inbox(
+    context: AppShellContext,
+    records: Vec<DevelopmentBoardRecord>,
+    inbox_records: Vec<InboxItemRecord>,
 ) -> AppShellView {
     let mut summary = DevelopmentBoardSummary::default();
     let mutations_available =
@@ -165,6 +204,7 @@ pub fn compose_app_shell(
             }
         })
         .collect();
+    let inbox = compose_inbox(context.projection_revision, inbox_records);
 
     AppShellView {
         project_name: context.project_name,
@@ -174,13 +214,35 @@ pub fn compose_app_shell(
         projection_revision: context.projection_revision,
         last_synced_at: context.last_synced_at,
         is_stale: context.is_stale,
-        inbox_count: context.inbox_count,
+        inbox_count: inbox.pending,
         max_concurrent_task_runs: context.max_concurrent_task_runs,
         development: DevelopmentBoardView {
             projection_revision: context.projection_revision,
             summary,
             task_rows,
         },
+        inbox,
+    }
+}
+
+fn compose_inbox(projection_revision: u64, records: Vec<InboxItemRecord>) -> InboxView {
+    let items = records
+        .into_iter()
+        .map(|record| InboxItemView {
+            request_id: record.request_id,
+            task_id: record.task_id,
+            task_run_id: record.task_run_id,
+            request_kind: record.request_kind,
+            prompt: record.prompt,
+            status: record.status,
+            requested_at: record.requested_at,
+        })
+        .collect::<Vec<_>>();
+    let pending = items.iter().filter(|item| item.status == "PENDING").count();
+    InboxView {
+        projection_revision,
+        pending,
+        items,
     }
 }
 

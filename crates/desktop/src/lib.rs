@@ -163,6 +163,11 @@ pub fn render_app(view: &AppShellView) -> String {
     dioxus_ssr::render_element(rsx! { App { initial_view: view.clone() } })
 }
 
+#[must_use]
+pub fn render_inbox(view: &AppShellView) -> String {
+    dioxus_ssr::render_element(inbox_page(view))
+}
+
 #[component]
 pub fn App(
     initial_view: AppShellView,
@@ -297,6 +302,7 @@ pub fn App(
                                 app_view,
                                 on_command,
                             ),
+                            Route::Inbox => inbox_page(&view),
                             route => placeholder(route),
                         }
                     }
@@ -710,6 +716,61 @@ fn status_pill(status: &str, category: &str) -> Element {
     rsx! { span { class: "status-pill {category} {normalized}", "{status}" } }
 }
 
+fn inbox_page(view: &AppShellView) -> Element {
+    let has_items = !view.inbox.items.is_empty();
+    let items = view.inbox.items.iter().map(|item| {
+        rsx! {
+            article { class: "inbox-item", key: "{item.request_id}",
+                header {
+                    div {
+                        span { class: "inbox-kind", "{item.request_kind}" }
+                        strong { "{item.request_id}" }
+                    }
+                    {status_pill(&item.status, "request")}
+                }
+                p { class: "inbox-prompt", "{item.prompt}" }
+                dl {
+                    div {
+                        dt { "TASK" }
+                        dd { "{item.task_id}" }
+                    }
+                    div {
+                        dt { "RUN" }
+                        dd { "{item.task_run_id}" }
+                    }
+                    div {
+                        dt { "REQUESTED" }
+                        dd { "{item.requested_at}" }
+                    }
+                }
+            }
+        }
+    });
+    rsx! {
+        section { class: "page inbox-page",
+            div { class: "page-heading",
+                div {
+                    p { class: "eyebrow", "DECIDE / RESPOND" }
+                    h2 { "Inbox" }
+                    p { class: "page-description",
+                        "Agentが停止して待っている入力要求を、Task Runと結び付けて確認します。"
+                    }
+                }
+                div { class: "revision-stamp", "ACTION INBOX · {view.inbox.pending} PENDING" }
+            }
+            if has_items {
+                div { class: "inbox-list", {items} }
+            } else {
+                div { class: "empty-state inbox-empty",
+                    span { class: "empty-glyph", "✓" }
+                    h3 { "対応待ちの入力要求はありません" }
+                    p { "Agentから入力要求が届くと、ここにTaskとRunを表示します。" }
+                }
+            }
+        }
+    }
+}
+
 fn placeholder(route: Route) -> Element {
     let (eyebrow, title, description) = match route {
         Route::Intent => (
@@ -722,11 +783,7 @@ fn placeholder(route: Route) -> Element {
             "Plan Review",
             "Task DAGと契約を確認し、実行前に承認します。",
         ),
-        Route::Inbox => (
-            "DECIDE / RESPOND",
-            "Inbox",
-            "入力要求と意思決定を、停止理由とともに扱います。",
-        ),
+        Route::Inbox => unreachable!("Inbox has its own view"),
         Route::BuildAcceptance => (
             "VERIFY / ACCEPT",
             "Build & Acceptance",
