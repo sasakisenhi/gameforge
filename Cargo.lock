@@ -2091,6 +2091,8 @@ version = "0.1.0"
 name = "gameforge-bootstrap"
 version = "0.1.0"
 dependencies = [
+ "gameforge-application",
+ "gameforge-domain",
  "gameforge-event-journal",
  "gameforge-persistence",
  "gameforge-project-documents",
