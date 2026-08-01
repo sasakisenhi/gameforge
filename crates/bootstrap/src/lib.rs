@@ -623,6 +623,15 @@ impl ProjectSession {
             .collect()
     }
 
+    pub(crate) fn local_checking_run_ids(&self) -> Vec<String> {
+        self.snapshot
+            .development_board
+            .iter()
+            .filter(|row| row.run_status.as_deref() == Some("LOCAL_CHECKING"))
+            .filter_map(|row| row.current_run_id.clone())
+            .collect()
+    }
+
     fn queue_task_run(
         &mut self,
         context: CommandContext,

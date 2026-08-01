@@ -116,14 +116,6 @@ impl<E: RunExecutionPort, V: LocalVerificationPort> ProjectCoordinator<E, V> {
                         red_evidence_present,
                         green_evidence_present,
                     )?;
-                    let request = self.session.local_verification_request(&task_run_id)?;
-                    if let Err(error) = self.verification.start_verification(&request) {
-                        self.session.record_local_verification_failed(
-                            &update_context.child("start-failed"),
-                            &task_run_id,
-                            &error,
-                        )?;
-                    }
                 }
                 RunExecutionUpdate::Failed {
                     task_run_id,
@@ -175,6 +167,25 @@ impl<E: RunExecutionPort, V: LocalVerificationPort> ProjectCoordinator<E, V> {
                     &detail,
                 )?,
             };
+        }
+
+        for (index, run_id) in self
+            .session
+            .local_checking_run_ids()
+            .into_iter()
+            .enumerate()
+        {
+            if self.verification.is_verification_active(&run_id) {
+                continue;
+            }
+            let request = self.session.local_verification_request(&run_id)?;
+            if let Err(error) = self.verification.start_verification(&request) {
+                self.session.record_local_verification_failed(
+                    &context.child(&format!("verification-start-{index}-failed")),
+                    &run_id,
+                    &error,
+                )?;
+            }
         }
 
         self.session

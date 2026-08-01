@@ -491,6 +491,10 @@ pub enum LocalVerificationUpdate {
 pub trait LocalVerificationPort {
     fn start_verification(&mut self, request: &LocalVerificationRequest) -> Result<(), String>;
 
+    fn is_verification_active(&self, _task_run_id: &str) -> bool {
+        false
+    }
+
     fn poll_updates(&mut self) -> Vec<LocalVerificationUpdate> {
         Vec::new()
     }

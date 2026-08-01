@@ -218,6 +218,10 @@ impl LocalVerificationPort for LocalCheckRunner {
         self.try_start(request)
     }
 
+    fn is_verification_active(&self, task_run_id: &str) -> bool {
+        self.active.contains_key(task_run_id)
+    }
+
     fn poll_updates(&mut self) -> Vec<LocalVerificationUpdate> {
         let mut completed = Vec::new();
         let mut updates = Vec::new();

@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -57,6 +57,7 @@ struct FakeState {
     verification_started: Vec<LocalVerificationRequest>,
     verification_cancelled: Vec<String>,
     verification_updates: VecDeque<LocalVerificationUpdate>,
+    verification_active: BTreeSet<String>,
 }
 
 struct FakeExecution {
@@ -100,29 +101,39 @@ impl RunExecutionPort for FakeExecution {
 
 impl LocalVerificationPort for FakeVerification {
     fn start_verification(&mut self, request: &LocalVerificationRequest) -> Result<(), String> {
-        self.state
-            .lock()
-            .unwrap()
-            .verification_started
-            .push(request.clone());
+        let mut state = self.state.lock().unwrap();
+        state.verification_started.push(request.clone());
+        state
+            .verification_active
+            .insert(request.task_run_id.clone());
         Ok(())
     }
 
-    fn poll_updates(&mut self) -> Vec<LocalVerificationUpdate> {
+    fn is_verification_active(&self, task_run_id: &str) -> bool {
         self.state
             .lock()
             .unwrap()
-            .verification_updates
-            .drain(..)
-            .collect()
+            .verification_active
+            .contains(task_run_id)
+    }
+
+    fn poll_updates(&mut self) -> Vec<LocalVerificationUpdate> {
+        let mut state = self.state.lock().unwrap();
+        let updates = state.verification_updates.drain(..).collect::<Vec<_>>();
+        for update in &updates {
+            let run_id = match update {
+                LocalVerificationUpdate::Passed { task_run_id, .. }
+                | LocalVerificationUpdate::Failed { task_run_id, .. } => task_run_id,
+            };
+            state.verification_active.remove(run_id);
+        }
+        updates
     }
 
     fn cancel_verification(&mut self, task_run_id: &str) -> Result<(), String> {
-        self.state
-            .lock()
-            .unwrap()
-            .verification_cancelled
-            .push(task_run_id.to_owned());
+        let mut state = self.state.lock().unwrap();
+        state.verification_cancelled.push(task_run_id.to_owned());
+        state.verification_active.remove(task_run_id);
         Ok(())
     }
 }
@@ -476,6 +487,75 @@ fn behavior_change_without_red_evidence_fails_the_tdd_gate() {
     assert_eq!(
         snapshot.development_board[0].health_flags,
         ["TDD_SEQUENCE_VIOLATION"]
+    );
+}
+
+#[test]
+fn restart_reconciles_a_local_checking_run_with_a_new_worker() {
+    let project = TempProject::with_tasks(1);
+    let first_state = Arc::new(Mutex::new(FakeState::default()));
+    let session = start_project(project.path(), "coordinator-first").unwrap();
+    let mut first = ProjectCoordinator::with_verification(
+        session,
+        FakeExecution {
+            state: Arc::clone(&first_state),
+        },
+        FakeVerification {
+            state: Arc::clone(&first_state),
+        },
+        ScheduleConfig::default(),
+    );
+    first
+        .execute(
+            &context("queue-recovery"),
+            ApplicationCommand::QueueTaskRun {
+                task_id: "TASK-001".to_owned(),
+                expected_projection_revision: 0,
+            },
+        )
+        .unwrap();
+    first_state
+        .lock()
+        .unwrap()
+        .updates
+        .push_back(RunExecutionUpdate::Completed {
+            task_run_id: "RUN-TASK-001-1".to_owned(),
+            agent_session_id: "agent-1".to_owned(),
+            red_evidence_present: true,
+            green_evidence_present: false,
+        });
+    first.tick(&context("agent-recovery")).unwrap();
+    drop(first);
+
+    let restarted_state = Arc::new(Mutex::new(FakeState::default()));
+    let session = start_project(project.path(), "coordinator-restarted").unwrap();
+    let mut restarted = ProjectCoordinator::with_verification(
+        session,
+        FakeExecution {
+            state: Arc::clone(&restarted_state),
+        },
+        FakeVerification {
+            state: Arc::clone(&restarted_state),
+        },
+        ScheduleConfig::default(),
+    );
+
+    restarted.tick(&context("recovery-tick")).unwrap();
+
+    assert_eq!(
+        restarted.snapshot().development_board[0]
+            .run_status
+            .as_deref(),
+        Some("LOCAL_CHECKING")
+    );
+    assert_eq!(
+        restarted_state.lock().unwrap().verification_started,
+        [LocalVerificationRequest {
+            task_run_id: "RUN-TASK-001-1".to_owned(),
+            task_id: "TASK-001".to_owned(),
+            base_commit: "a".repeat(40),
+            worktree_path: "worktree-RUN-TASK-001-1".to_owned(),
+        }]
     );
 }
 

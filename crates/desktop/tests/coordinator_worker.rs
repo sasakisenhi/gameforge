@@ -53,7 +53,10 @@ struct FakeState {
 
 struct FakeExecution(Arc<Mutex<FakeState>>);
 
-struct FakeVerification;
+#[derive(Default)]
+struct FakeVerification {
+    active: bool,
+}
 
 impl RunExecutionPort for FakeExecution {
     fn start_run(&mut self, request: &RunLaunchRequest) -> RunLaunchOutcome {
@@ -74,7 +77,12 @@ impl RunExecutionPort for FakeExecution {
 
 impl LocalVerificationPort for FakeVerification {
     fn start_verification(&mut self, _request: &LocalVerificationRequest) -> Result<(), String> {
+        self.active = true;
         Ok(())
+    }
+
+    fn is_verification_active(&self, _task_run_id: &str) -> bool {
+        self.active
     }
 }
 
@@ -86,7 +94,7 @@ fn worker_polls_execution_updates_without_an_additional_user_command() {
     let coordinator = ProjectCoordinator::with_verification(
         session,
         FakeExecution(Arc::clone(&state)),
-        FakeVerification,
+        FakeVerification::default(),
         ScheduleConfig::default(),
     );
     let worker = spawn_coordinator_worker(
