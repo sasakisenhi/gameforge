@@ -3,10 +3,12 @@
 
 use std::{collections::BTreeMap, fmt, fs, path::Path};
 
-use gameforge_application::ApplicationCommand;
+use gameforge_application::{
+    ApplicationCommand, RunExecutionPort, RunLaunchOutcome, RunLaunchRequest,
+};
 use gameforge_domain::{
     CommitSha, ContractRevision, TaskId, TaskRun, TaskRunCommand, TaskRunEvent, TaskRunId,
-    decide_task_run,
+    decide_task_run, evolve_task_run,
 };
 use gameforge_event_journal::{
     AggregateRef, EventEnvelope, EventHeader, EventJournal, SUPPORTED_SCHEMA_VERSION,
@@ -104,6 +106,112 @@ impl ProjectSession {
                 .apply_event(&event)
                 .map_err(|error| BootstrapError::Projection(error.to_string()))?;
         }
+        self.refresh_snapshot()?;
+        Ok(self.snapshot.clone())
+    }
+
+    pub fn run_supervisor(
+        &mut self,
+        context: CommandContext,
+        run_id: &str,
+        execution: &mut impl RunExecutionPort,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        validate_command_context(&context)?;
+        if let Some(previous) = self.supervisor_retry(&context, run_id)? {
+            return Ok(previous);
+        }
+
+        let row = self
+            .snapshot
+            .development_board
+            .iter()
+            .find(|row| row.current_run_id.as_deref() == Some(run_id))
+            .ok_or_else(|| BootstrapError::RunNotFound(run_id.to_owned()))?;
+        if row.run_status.as_deref() != Some("PREPARING") {
+            return Err(BootstrapError::RunNotPreparing {
+                run_id: run_id.to_owned(),
+                actual: row.run_status.clone(),
+            });
+        }
+
+        let (prepared_run, preparation) = self.prepared_run(run_id)?;
+        let request = RunLaunchRequest {
+            task_run_id: run_id.to_owned(),
+            task_id: prepared_run.task_id().as_str().to_owned(),
+            contract_revision: prepared_run.contract_revision().get(),
+            base_commit: prepared_run.base_commit().as_str().to_owned(),
+        };
+        let requested = start_requested_event(&context, &request, &preparation)?;
+        self.journal
+            .append(&requested)
+            .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+        self.projection
+            .apply_event(&requested)
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+
+        let outcome = execution.start_run(&request);
+        let (command, state, outcome_payload) = match outcome {
+            RunLaunchOutcome::Started(started) => {
+                let mut payload = BTreeMap::new();
+                payload.insert(
+                    "resource_lease_id".to_owned(),
+                    started.resource_lease_id().to_owned(),
+                );
+                payload.insert(
+                    "worktree_lease_id".to_owned(),
+                    started.worktree_lease_id().to_owned(),
+                );
+                payload.insert(
+                    "agent_session_id".to_owned(),
+                    started.agent_session_id().to_owned(),
+                );
+                (
+                    TaskRunCommand::StartAgent {
+                        has_resource_lease: true,
+                        has_worktree_lease: true,
+                    },
+                    "AGENT_RUNNING",
+                    payload,
+                )
+            }
+            RunLaunchOutcome::Deferred { reason, detail } => {
+                let mut payload = BTreeMap::new();
+                payload.insert("deferral_reason".to_owned(), reason.as_str().to_owned());
+                payload.insert("deferral_detail".to_owned(), detail);
+                (
+                    TaskRunCommand::DeferPreparation,
+                    "QUEUED",
+                    payload,
+                )
+            }
+        };
+        let domain_events = decide_task_run(&prepared_run, command)
+            .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        let expected_event = if state == "AGENT_RUNNING" {
+            TaskRunEvent::AgentStarted
+        } else {
+            TaskRunEvent::PreparationDeferred
+        };
+        if domain_events != [expected_event] {
+            return Err(BootstrapError::InvalidCommand(
+                "Supervisor emitted an unexpected TaskRun event".to_owned(),
+            ));
+        }
+
+        let state_changed = supervisor_state_event(
+            &context,
+            &request,
+            &preparation,
+            &requested,
+            state,
+            outcome_payload,
+        )?;
+        self.journal
+            .append(&state_changed)
+            .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+        self.projection
+            .apply_event(&state_changed)
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
         self.refresh_snapshot()?;
         Ok(self.snapshot.clone())
     }
@@ -250,6 +358,88 @@ impl ProjectSession {
             })
     }
 
+    fn prepared_run(
+        &self,
+        run_id: &str,
+    ) -> Result<(TaskRun, EventEnvelope), BootstrapError> {
+        let queued = self.queued_event_for_run(run_id)?;
+        let task_id = event_payload(queued, "task_id")?;
+        let contract_revision = event_payload(queued, "contract_revision")?
+            .parse::<u64>()
+            .map_err(|_| BootstrapError::Journal("invalid contract_revision".to_owned()))?;
+        let run = TaskRun::new(
+            TaskRunId::new(run_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
+            TaskId::new(task_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
+            ContractRevision::new(contract_revision)
+                .map_err(|error| BootstrapError::Journal(error.to_string()))?,
+            CommitSha::new(event_payload(queued, "base_commit")?)
+                .map_err(|error| BootstrapError::Journal(error.to_string()))?,
+        );
+        let preparation = self
+            .journal
+            .events()
+            .iter()
+            .find(|event| {
+                event.event_type() == "TaskRunStateChanged"
+                    && event.header().aggregate.aggregate_id() == run_id
+                    && event.payload().get("state").map(String::as_str) == Some("PREPARING")
+            })
+            .cloned()
+            .ok_or_else(|| {
+                BootstrapError::Journal(format!(
+                    "PREPARING TaskRunStateChanged event not found for {run_id}"
+                ))
+            })?;
+        Ok((
+            evolve_task_run(run, &TaskRunEvent::PreparationStarted),
+            preparation,
+        ))
+    }
+
+    fn supervisor_retry(
+        &self,
+        context: &CommandContext,
+        run_id: &str,
+    ) -> Result<Option<ProjectSnapshot>, BootstrapError> {
+        let previous = self
+            .journal
+            .events()
+            .iter()
+            .filter(|event| event.header().correlation_id == context.command_id)
+            .collect::<Vec<_>>();
+        if previous.is_empty() {
+            return Ok(None);
+        }
+        let same_request = previous.iter().any(|event| {
+            event.event_type() == "TaskRunStartRequested"
+                && event.payload().get("run_id").map(String::as_str) == Some(run_id)
+                && event.payload().get("base_commit").map(String::as_str)
+                    == Some(context.base_commit.as_str())
+                && event.header().actor == context.actor
+                && event.header().occurred_at == context.occurred_at
+        });
+        if !same_request {
+            return Err(BootstrapError::CommandIdConflict(
+                context.command_id.clone(),
+            ));
+        }
+        let completed = previous.iter().any(|event| {
+            event.event_type() == "TaskRunStateChanged"
+                && event.header().aggregate.aggregate_id() == run_id
+                && matches!(
+                    event.payload().get("state").map(String::as_str),
+                    Some("AGENT_RUNNING" | "QUEUED")
+                )
+        });
+        if completed {
+            Ok(Some(self.snapshot.clone()))
+        } else {
+            Err(BootstrapError::OperationOutcomeUnknown(
+                context.command_id.clone(),
+            ))
+        }
+    }
+
     fn preparation_event(
         &self,
         context: &CommandContext,
@@ -328,6 +518,12 @@ pub enum BootstrapError {
     TaskNotFound(String),
     TaskNotReady(String),
     TaskAlreadyHasRun(String),
+    RunNotFound(String),
+    RunNotPreparing {
+        run_id: String,
+        actual: Option<String>,
+    },
+    OperationOutcomeUnknown(String),
 }
 
 impl fmt::Display for BootstrapError {
@@ -358,6 +554,16 @@ impl fmt::Display for BootstrapError {
             Self::TaskAlreadyHasRun(task_id) => {
                 write!(formatter, "Task already has a Run: {task_id}")
             }
+            Self::RunNotFound(run_id) => write!(formatter, "Task Run not found: {run_id}"),
+            Self::RunNotPreparing { run_id, actual } => write!(
+                formatter,
+                "Task Run is not PREPARING: {run_id} ({})",
+                actual.as_deref().unwrap_or("NO_RUN_STATUS")
+            ),
+            Self::OperationOutcomeUnknown(command_id) => write!(
+                formatter,
+                "external operation outcome is unknown: {command_id}"
+            ),
         }
     }
 }
@@ -486,6 +692,68 @@ fn queued_event(
         },
         "TaskRunQueued",
         payload,
+    )
+    .map_err(|error| BootstrapError::Journal(error.to_string()))
+}
+
+fn start_requested_event(
+    context: &CommandContext,
+    request: &RunLaunchRequest,
+    preparation: &EventEnvelope,
+) -> Result<EventEnvelope, BootstrapError> {
+    let mut payload = BTreeMap::new();
+    payload.insert("task_id".to_owned(), request.task_id.clone());
+    payload.insert("run_id".to_owned(), request.task_run_id.clone());
+    payload.insert(
+        "contract_revision".to_owned(),
+        request.contract_revision.to_string(),
+    );
+    payload.insert("base_commit".to_owned(), request.base_commit.clone());
+    let aggregate = AggregateRef::new("Operation", format!("OP-{}-START", context.command_id))
+        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+    EventEnvelope::new(
+        EventHeader {
+            event_id: format!("EVT-{}-START-REQUESTED", context.command_id),
+            schema_version: SUPPORTED_SCHEMA_VERSION,
+            occurred_at: context.occurred_at.clone(),
+            aggregate,
+            aggregate_version: 1,
+            correlation_id: context.command_id.clone(),
+            causation_id: Some(preparation.header().event_id.clone()),
+            actor: context.actor.clone(),
+        },
+        "TaskRunStartRequested",
+        payload,
+    )
+    .map_err(|error| BootstrapError::Journal(error.to_string()))
+}
+
+fn supervisor_state_event(
+    context: &CommandContext,
+    request: &RunLaunchRequest,
+    preparation: &EventEnvelope,
+    requested: &EventEnvelope,
+    state: &str,
+    mut outcome_payload: BTreeMap<String, String>,
+) -> Result<EventEnvelope, BootstrapError> {
+    outcome_payload.insert("task_id".to_owned(), request.task_id.clone());
+    outcome_payload.insert("run_id".to_owned(), request.task_run_id.clone());
+    outcome_payload.insert("state".to_owned(), state.to_owned());
+    let aggregate = AggregateRef::new("TaskRun", &request.task_run_id)
+        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+    EventEnvelope::new(
+        EventHeader {
+            event_id: format!("EVT-{}-{}", context.command_id, state),
+            schema_version: SUPPORTED_SCHEMA_VERSION,
+            occurred_at: context.occurred_at.clone(),
+            aggregate,
+            aggregate_version: preparation.header().aggregate_version + 1,
+            correlation_id: context.command_id.clone(),
+            causation_id: Some(requested.header().event_id.clone()),
+            actor: context.actor.clone(),
+        },
+        "TaskRunStateChanged",
+        outcome_payload,
     )
     .map_err(|error| BootstrapError::Journal(error.to_string()))
 }

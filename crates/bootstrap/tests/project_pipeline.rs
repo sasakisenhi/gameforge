@@ -4,7 +4,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use gameforge_application::ApplicationCommand;
+use gameforge_application::{
+    ApplicationCommand, RunExecutionPort, RunLaunchDeferral, RunLaunchOutcome, RunLaunchRequest,
+    StartedRun,
+};
 use gameforge_bootstrap::{
     BootstrapError, CommandContext, rebuild_project, start_project, validate_project,
 };
@@ -329,6 +332,135 @@ fn scheduler_at_capacity_keeps_the_second_run_queued_without_new_events() {
     );
     let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
     assert_eq!(journal.lines().count(), 3);
+}
+
+#[test]
+fn supervisor_records_the_request_before_starting_and_advances_the_run() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    queue(&mut session, "CMD-QUEUE-1", "TASK-001", 0);
+    session
+        .run_scheduler(
+            command_context("CMD-SCHEDULER-1"),
+            ScheduleConfig {
+                max_concurrent_task_runs: 1,
+            },
+        )
+        .unwrap();
+    let mut execution = FakeRunExecution::started(
+        project.path().join(".game-dev/events/events.jsonl"),
+    );
+
+    let started = session
+        .run_supervisor(
+            command_context("CMD-SUPERVISOR-1"),
+            "RUN-TASK-001-1",
+            &mut execution,
+        )
+        .unwrap();
+
+    assert_eq!(execution.calls.len(), 1);
+    assert_eq!(execution.calls[0].task_run_id, "RUN-TASK-001-1");
+    assert_eq!(execution.calls[0].task_id, "TASK-001");
+    assert_eq!(execution.calls[0].contract_revision, 1);
+    assert_eq!(execution.calls[0].base_commit, "a".repeat(40));
+    assert_eq!(
+        started.development_board[0].run_status.as_deref(),
+        Some("AGENT_RUNNING")
+    );
+    assert_eq!(started.projection_revision, 4);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 4);
+    assert!(journal.contains("TaskRunStartRequested"));
+    assert!(journal.contains("resource-lease-1"));
+    assert!(journal.contains("worktree-lease-1"));
+    assert!(journal.contains("agent-session-1"));
+}
+
+#[test]
+fn supervisor_returns_a_run_to_queue_when_resources_are_unavailable() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    queue(&mut session, "CMD-QUEUE-1", "TASK-001", 0);
+    session
+        .run_scheduler(
+            command_context("CMD-SCHEDULER-1"),
+            ScheduleConfig {
+                max_concurrent_task_runs: 1,
+            },
+        )
+        .unwrap();
+    let mut execution = FakeRunExecution::deferred(
+        project.path().join(".game-dev/events/events.jsonl"),
+    );
+
+    let deferred = session
+        .run_supervisor(
+            command_context("CMD-SUPERVISOR-1"),
+            "RUN-TASK-001-1",
+            &mut execution,
+        )
+        .unwrap();
+
+    assert_eq!(execution.calls.len(), 1);
+    assert_eq!(
+        deferred.development_board[0].run_status.as_deref(),
+        Some("QUEUED")
+    );
+    assert_ne!(
+        deferred.development_board[0].run_status.as_deref(),
+        Some("FAILED")
+    );
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert!(journal.contains("TaskRunStartRequested"));
+    assert!(journal.contains("RESOURCE_UNAVAILABLE"));
+    assert!(journal.contains("全実行枠が使用中"));
+}
+
+struct FakeRunExecution {
+    journal_path: PathBuf,
+    outcome: Option<RunLaunchOutcome>,
+    calls: Vec<RunLaunchRequest>,
+}
+
+impl FakeRunExecution {
+    fn started(journal_path: PathBuf) -> Self {
+        Self {
+            journal_path,
+            outcome: Some(RunLaunchOutcome::Started(
+                StartedRun::new(
+                    "resource-lease-1",
+                    "worktree-lease-1",
+                    "agent-session-1",
+                )
+                .unwrap(),
+            )),
+            calls: Vec::new(),
+        }
+    }
+
+    fn deferred(journal_path: PathBuf) -> Self {
+        Self {
+            journal_path,
+            outcome: Some(RunLaunchOutcome::Deferred {
+                reason: RunLaunchDeferral::ResourceUnavailable,
+                detail: "全実行枠が使用中".to_owned(),
+            }),
+            calls: Vec::new(),
+        }
+    }
+}
+
+impl RunExecutionPort for FakeRunExecution {
+    fn start_run(&mut self, request: &RunLaunchRequest) -> RunLaunchOutcome {
+        let journal = fs::read_to_string(&self.journal_path).unwrap();
+        assert!(
+            journal.contains("TaskRunStartRequested"),
+            "外部Adapterを呼ぶ前に開始要求を記録する"
+        );
+        self.calls.push(request.clone());
+        self.outcome.take().unwrap()
+    }
 }
 
 fn queue(
