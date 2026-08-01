@@ -178,11 +178,7 @@ impl ProjectSession {
                 let mut payload = BTreeMap::new();
                 payload.insert("deferral_reason".to_owned(), reason.as_str().to_owned());
                 payload.insert("deferral_detail".to_owned(), detail);
-                (
-                    TaskRunCommand::DeferPreparation,
-                    "QUEUED",
-                    payload,
-                )
+                (TaskRunCommand::DeferPreparation, "QUEUED", payload)
             }
         };
         let domain_events = decide_task_run(&prepared_run, command)
@@ -358,10 +354,7 @@ impl ProjectSession {
             })
     }
 
-    fn prepared_run(
-        &self,
-        run_id: &str,
-    ) -> Result<(TaskRun, EventEnvelope), BootstrapError> {
+    fn prepared_run(&self, run_id: &str) -> Result<(TaskRun, EventEnvelope), BootstrapError> {
         let (run, latest) = self.task_run_history(run_id)?;
         let actual = latest.payload().get("state").cloned();
         if actual.as_deref() != Some("PREPARING") {
@@ -373,10 +366,7 @@ impl ProjectSession {
         Ok((run, latest))
     }
 
-    fn task_run_history(
-        &self,
-        run_id: &str,
-    ) -> Result<(TaskRun, EventEnvelope), BootstrapError> {
+    fn task_run_history(&self, run_id: &str) -> Result<(TaskRun, EventEnvelope), BootstrapError> {
         let queued = self.queued_event_for_run(run_id)?;
         let task_id = event_payload(queued, "task_id")?;
         let contract_revision = event_payload(queued, "contract_revision")?
@@ -522,7 +512,10 @@ pub enum BootstrapError {
     InvalidCommand(String),
     UnsupportedCommand(String),
     CommandIdConflict(String),
-    ProjectionRevisionConflict { expected: u64, actual: u64 },
+    ProjectionRevisionConflict {
+        expected: u64,
+        actual: u64,
+    },
     TaskNotFound(String),
     TaskNotReady(String),
     TaskAlreadyHasRun(String),

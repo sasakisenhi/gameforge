@@ -347,17 +347,12 @@ fn supervisor_records_the_request_before_starting_and_advances_the_run() {
             },
         )
         .unwrap();
-    let mut execution = FakeRunExecution::started(
-        project.path().join(".game-dev/events/events.jsonl"),
-    );
+    let mut execution =
+        FakeRunExecution::started(project.path().join(".game-dev/events/events.jsonl"));
 
     let supervisor_context = command_context("CMD-SUPERVISOR-1");
     let started = session
-        .run_supervisor(
-            supervisor_context.clone(),
-            "RUN-TASK-001-1",
-            &mut execution,
-        )
+        .run_supervisor(supervisor_context.clone(), "RUN-TASK-001-1", &mut execution)
         .unwrap();
 
     assert_eq!(execution.calls.len(), 1);
@@ -397,9 +392,8 @@ fn supervisor_returns_a_run_to_queue_when_resources_are_unavailable() {
             },
         )
         .unwrap();
-    let mut execution = FakeRunExecution::deferred(
-        project.path().join(".game-dev/events/events.jsonl"),
-    );
+    let mut execution =
+        FakeRunExecution::deferred(project.path().join(".game-dev/events/events.jsonl"));
 
     let deferred = session
         .run_supervisor(
@@ -484,12 +478,7 @@ impl FakeRunExecution {
         Self {
             journal_path,
             outcome: Some(RunLaunchOutcome::Started(
-                StartedRun::new(
-                    "resource-lease-1",
-                    "worktree-lease-1",
-                    "agent-session-1",
-                )
-                .unwrap(),
+                StartedRun::new("resource-lease-1", "worktree-lease-1", "agent-session-1").unwrap(),
             )),
             calls: Vec::new(),
         }

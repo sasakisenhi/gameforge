@@ -1,6 +1,6 @@
 use gameforge_application::{
     ActionError, AppShellContext, ApplicationCommand, BoardIntent, ConnectionState,
-    DevelopmentBoardRecord, command_for_board_intent, compose_app_shell,
+    DevelopmentBoardRecord, StartedRun, command_for_board_intent, compose_app_shell,
 };
 
 fn context(connection: ConnectionState) -> AppShellContext {
@@ -125,4 +125,27 @@ fn rejects_mutation_from_disconnected_stale_or_busy_views() {
         ),
         Err(ActionError::ActionUnavailable { .. })
     ));
+}
+
+#[test]
+fn started_run_requires_every_external_handle() {
+    assert!(StartedRun::new("resource-1", "worktree-1", "agent-1").is_ok());
+    assert_eq!(
+        StartedRun::new("", "worktree-1", "agent-1")
+            .unwrap_err()
+            .to_string(),
+        "resource_lease_id must not be empty"
+    );
+    assert_eq!(
+        StartedRun::new("resource-1", " ", "agent-1")
+            .unwrap_err()
+            .to_string(),
+        "worktree_lease_id must not be empty"
+    );
+    assert_eq!(
+        StartedRun::new("resource-1", "worktree-1", "")
+            .unwrap_err()
+            .to_string(),
+        "agent_session_id must not be empty"
+    );
 }
