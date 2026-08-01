@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+pub use gameforgo_application::DevelopmentBoardRecord as DevelopmentBoardRow;
 use gameforgo_event_journal::EventEnvelope;
 use gameforgo_project_documents::TaskDocument;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -33,15 +34,6 @@ CREATE TABLE IF NOT EXISTS development_board_rows (
 
 INSERT OR IGNORE INTO projection_meta(key, value) VALUES ('revision', 0);
 ";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DevelopmentBoardRow {
-    pub task_id: String,
-    pub title: String,
-    pub task_status: String,
-    pub current_run_id: Option<String>,
-    pub run_status: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionError {
@@ -171,6 +163,7 @@ impl ProjectionStore {
                 task_status: row.get(2)?,
                 current_run_id: row.get(3)?,
                 run_status: row.get(4)?,
+                health_flags: Vec::new(),
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)

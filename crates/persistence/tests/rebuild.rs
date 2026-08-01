@@ -86,6 +86,7 @@ fn full_rebuild_matches_incremental_projection() {
             task_status: "READY".to_owned(),
             current_run_id: Some("RUN-001".to_owned()),
             run_status: Some("AGENT_RUNNING".to_owned()),
+            health_flags: Vec::new(),
         }]
     );
 }

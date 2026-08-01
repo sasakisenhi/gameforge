@@ -1,7 +1,9 @@
 [workspace]
 members = [
+    "crates/application",
     "crates/bootstrap",
     "crates/cli",
+    "crates/desktop",
     "crates/domain",
     "crates/control-protocol",
     "crates/event-journal",

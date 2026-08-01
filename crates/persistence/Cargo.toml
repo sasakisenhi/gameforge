@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+gameforgo-application = { path = "../application" }
 gameforgo-event-journal = { path = "../event-journal" }
 gameforgo-project-documents = { path = "../project-documents" }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
