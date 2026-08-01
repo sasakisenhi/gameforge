@@ -3,7 +3,9 @@
 
 use std::fmt;
 
-pub use gameforge_application::DevelopmentBoardRecord as DevelopmentBoardRow;
+pub use gameforge_application::{
+    DevelopmentBoardRecord as DevelopmentBoardRow, InboxItemRecord as InboxRow,
+};
 use gameforge_event_journal::EventEnvelope;
 use gameforge_project_documents::TaskDocument;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -30,6 +32,16 @@ CREATE TABLE IF NOT EXISTS development_board_rows (
     task_status TEXT NOT NULL,
     current_run_id TEXT,
     run_status TEXT
+);
+
+CREATE TABLE IF NOT EXISTS inbox_rows (
+    request_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    task_run_id TEXT NOT NULL,
+    request_kind TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL,
+    requested_at TEXT NOT NULL
 );
 
 INSERT OR IGNORE INTO projection_meta(key, value) VALUES ('revision', 0);
@@ -131,6 +143,7 @@ impl ProjectionStore {
         let transaction = self.connection.transaction()?;
         transaction.execute("DELETE FROM applied_events", [])?;
         transaction.execute("DELETE FROM development_board_rows", [])?;
+        transaction.execute("DELETE FROM inbox_rows", [])?;
         transaction.execute(
             "UPDATE projection_meta SET value = 0 WHERE key = 'revision'",
             [],
@@ -185,6 +198,25 @@ impl ProjectionStore {
                 current_run_id: row.get(3)?,
                 run_status: row.get(4)?,
                 health_flags: Vec::new(),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn inbox_rows(&self) -> Result<Vec<InboxRow>, ProjectionError> {
+        let mut statement = self.connection.prepare(
+            "SELECT request_id, task_id, task_run_id, request_kind, prompt, status, requested_at
+             FROM inbox_rows ORDER BY requested_at, request_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(InboxRow {
+                request_id: row.get(0)?,
+                task_id: row.get(1)?,
+                task_run_id: row.get(2)?,
+                request_kind: row.get(3)?,
+                prompt: row.get(4)?,
+                status: row.get(5)?,
+                requested_at: row.get(6)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -260,6 +292,20 @@ fn apply_event_in_transaction(
                     event_type: event.event_type().to_owned(),
                     task_id: task_id.to_owned(),
                 });
+            }
+            if state == "INPUT_REQUIRED" {
+                transaction.execute(
+                    "INSERT INTO inbox_rows(
+                        request_id, task_id, task_run_id, request_kind, prompt, status, requested_at
+                     ) VALUES (?1, ?2, ?3, 'INPUT', ?4, 'PENDING', ?5)",
+                    params![
+                        payload(event, "request_id")?,
+                        task_id,
+                        run_id,
+                        payload(event, "request_prompt")?,
+                        header.occurred_at,
+                    ],
+                )?;
             }
         }
         _ => {}

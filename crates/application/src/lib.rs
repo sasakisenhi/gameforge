@@ -33,6 +33,17 @@ pub struct DevelopmentBoardRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxItemRecord {
+    pub request_id: String,
+    pub task_id: String,
+    pub task_run_id: String,
+    pub request_kind: String,
+    pub prompt: String,
+    pub status: String,
+    pub requested_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRowView {
     pub task_id: String,
     pub title: String,
