@@ -140,6 +140,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "gameforgo-control-protocol"
+version = "0.1.0"
+
+[[package]]
 name = "gameforgo-domain"
 version = "0.1.0"
 
@@ -168,6 +172,13 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "sha2",
+]
+
+[[package]]
+name = "gameforgo-runtime"
+version = "0.1.0"
+dependencies = [
+ "gameforgo-control-protocol",
 ]
 
 [[package]]

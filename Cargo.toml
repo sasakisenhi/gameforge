@@ -1,9 +1,11 @@
 [workspace]
 members = [
     "crates/domain",
+    "crates/control-protocol",
     "crates/event-journal",
     "crates/persistence",
     "crates/project-documents",
+    "crates/runtime",
 ]
 resolver = "3"
 
