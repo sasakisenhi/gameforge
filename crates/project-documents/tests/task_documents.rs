@@ -1,5 +1,5 @@
 use gameforge_project_documents::{
-    ChangedPathViolation, DocumentError, load_task_document, validate_changed_paths,
+    ChangedPathViolation, DocumentError, is_test_path, load_task_document, validate_changed_paths,
     validate_task_documents,
 };
 
@@ -154,6 +154,21 @@ fn accepts_changed_paths_matched_by_test_paths() {
     let task = load_task_document(&task_document("TASK-001", " []")).unwrap();
 
     validate_changed_paths(&task, ["crates/game_logic/tests/sand/falls.rs"]).unwrap();
+}
+
+#[test]
+fn classifies_only_safe_paths_matching_test_scope() {
+    let task = load_task_document(&task_document("TASK-001", " []")).unwrap();
+
+    assert!(is_test_path(
+        &task,
+        "crates/game_logic/tests/sand/falling.rs"
+    ));
+    assert!(!is_test_path(
+        &task,
+        "crates/game_logic/src/sand/falling.rs"
+    ));
+    assert!(!is_test_path(&task, "../tests/sand/falling.rs"));
 }
 
 #[test]
