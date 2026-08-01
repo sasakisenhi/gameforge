@@ -23,6 +23,10 @@ impl LocalVerificationPort for UnavailableLocalVerification {
     ) -> Result<(), String> {
         Err("Local Verification adapter is not configured".to_owned())
     }
+
+    fn is_verification_active(&self, _task_run_id: &str) -> bool {
+        false
+    }
 }
 
 impl<E: RunExecutionPort> ProjectCoordinator<E, UnavailableLocalVerification> {

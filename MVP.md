@@ -1137,6 +1137,7 @@ ai-game-control-plane/
 │  ├─ scheduler/
 │  ├─ codex-protocol/
 │  ├─ codex-adapter/
+│  ├─ local-check-adapter/
 │  ├─ git-adapter/
 │  ├─ github-adapter/
 │  ├─ conflict-analyzer/

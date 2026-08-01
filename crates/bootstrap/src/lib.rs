@@ -1121,7 +1121,9 @@ fn validate_required(field: &'static str, value: &str) -> Result<(), BootstrapEr
 }
 
 fn boolean_payload(event: &EventEnvelope, field: &'static str) -> Result<bool, BootstrapError> {
-    event_payload(event, field)?
-        .parse::<bool>()
-        .map_err(|_| BootstrapError::Journal(format!("invalid boolean payload field {field}")))
+    event.payload().get(field).map_or(Ok(false), |value| {
+        value
+            .parse::<bool>()
+            .map_err(|_| BootstrapError::Journal(format!("invalid boolean payload field {field}")))
+    })
 }
