@@ -2107,6 +2107,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gameforge-codex-adapter"
+version = "0.1.0"
+dependencies = [
+ "gameforge-application",
+ "serde_json",
+]
+
+[[package]]
 name = "gameforge-control-protocol"
 version = "0.1.0"
 dependencies = [
@@ -2122,6 +2130,7 @@ dependencies = [
  "dioxus-ssr",
  "gameforge-application",
  "gameforge-bootstrap",
+ "gameforge-codex-adapter",
  "gameforge-runtime",
 ]
 

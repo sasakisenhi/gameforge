@@ -3,6 +3,7 @@ members = [
     "crates/application",
     "crates/bootstrap",
     "crates/cli",
+    "crates/codex-adapter",
     "crates/desktop",
     "crates/domain",
     "crates/control-protocol",

@@ -25,6 +25,16 @@ pub struct ScheduleConfig {
     pub max_concurrent_task_runs: usize,
 }
 
+pub const DEFAULT_MAX_CONCURRENT_TASK_RUNS: usize = 3;
+
+impl Default for ScheduleConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_task_runs: DEFAULT_MAX_CONCURRENT_TASK_RUNS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeferralReason {
     Capacity,

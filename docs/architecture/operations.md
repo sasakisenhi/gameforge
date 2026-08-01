@@ -40,7 +40,7 @@
 - Application Portで`async_trait`を使うか、明示的なFuture型を使うか
 - 単一Writerを維持した上で、SQLite ProjectorをCoordinatorと同一processにするか従属processにするか
 - GitHub状態取得をpolling中心にするか、webhookも受けるか
-- Codex App ServerをTask Runごとに分離するか、processを共有するか
+- Codex App ServerをTask Runごとに分離するMVP判断を、長期運用でも維持するか
 - Manual AdjustmentをTask Run種別にするか、付随Eventにするか
 - Acceptance ResultをScenario単位に分割するか、Session判定を中心にするか
 - rust-analyzerを導入する段階と、`syn`解析結果との統合形式

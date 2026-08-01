@@ -398,6 +398,7 @@ impl StartedRun {
 pub enum RunLaunchDeferral {
     ResourceUnavailable,
     WorktreeUnavailable,
+    AgentUnavailable,
 }
 
 impl RunLaunchDeferral {
@@ -406,6 +407,7 @@ impl RunLaunchDeferral {
         match self {
             Self::ResourceUnavailable => "RESOURCE_UNAVAILABLE",
             Self::WorktreeUnavailable => "WORKTREE_UNAVAILABLE",
+            Self::AgentUnavailable => "AGENT_UNAVAILABLE",
         }
     }
 }
@@ -419,8 +421,42 @@ pub enum RunLaunchOutcome {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunExecutionUpdate {
+    Completed {
+        task_run_id: String,
+        agent_session_id: String,
+    },
+    Failed {
+        task_run_id: String,
+        detail: String,
+    },
+    InputRequired {
+        task_run_id: String,
+        request_id: String,
+        prompt: String,
+    },
+}
+
 pub trait RunExecutionPort {
     fn start_run(&mut self, request: &RunLaunchRequest) -> RunLaunchOutcome;
+
+    fn poll_updates(&mut self) -> Vec<RunExecutionUpdate> {
+        Vec::new()
+    }
+
+    fn cancel_run(&mut self, _task_run_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn answer_input(
+        &mut self,
+        _task_run_id: &str,
+        _request_id: &str,
+        _answer: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -10,6 +10,7 @@ dioxus = { version = "=0.7.10", default-features = false, features = ["minimal",
 dioxus-ssr = "=0.7.10"
 gameforge-application = { path = "../application" }
 gameforge-bootstrap = { path = "../bootstrap" }
+gameforge-codex-adapter = { path = "../codex-adapter" }
 gameforge-runtime = { path = "../runtime" }
 
 [lints]

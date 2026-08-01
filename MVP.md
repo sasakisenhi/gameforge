@@ -404,7 +404,7 @@ Scheduler ── max_concurrent_task_runs
 N × Codex Process + Worktree
 ```
 
-MVPの既定値は、ローカル資源と運用の理解を優先して`max_concurrent_task_runs = 2`とする。ただし設定で増減でき、Queue、Task Run、Agent Run、WorktreeのデータモデルとUIは任意個を扱える設計にする。
+MVPの既定値は`max_concurrent_task_runs = 3`とする。ただし設定で増減でき、Queue、Task Run、Agent Run、WorktreeのデータモデルとUIは任意個を扱える設計にする。
 
 Schedulerは少なくとも次を考慮する。
 

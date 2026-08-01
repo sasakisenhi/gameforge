@@ -3,5 +3,5 @@
 *.sqlite-shm
 *.sqlite-wal
 **/.game-dev/runtime/
+**/.game-dev/worktrees/
 /examples/**/.game-dev/events/events.jsonl
-

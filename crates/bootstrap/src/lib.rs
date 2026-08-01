@@ -1,7 +1,21 @@
 //! Shared composition root for desktop and headless coordinators.
 #![allow(clippy::missing_errors_doc)]
 
-use std::{collections::BTreeMap, fmt, fs, path::Path};
+mod coordinator;
+mod events;
+mod model;
+mod project;
+
+pub use coordinator::ProjectCoordinator;
+pub use model::{BootstrapError, CommandContext, ProjectSnapshot, ProjectValidation};
+pub use project::{rebuild_project, start_project, validate_project};
+
+use events::{
+    cancelled_event, event_payload, execution_update_event, input_answered_event,
+    input_required_event, queued_event, start_requested_event, supervisor_state_event,
+};
+
+use std::collections::BTreeMap;
 
 use gameforge_application::{
     ApplicationCommand, RunExecutionPort, RunLaunchOutcome, RunLaunchRequest,
@@ -13,26 +27,11 @@ use gameforge_domain::{
 use gameforge_event_journal::{
     AggregateRef, EventEnvelope, EventHeader, EventJournal, SUPPORTED_SCHEMA_VERSION,
 };
-use gameforge_persistence::{DevelopmentBoardRow, InboxRow, ProjectionStore};
-use gameforge_project_documents::{
-    TaskDocument, TaskDocumentStatus, load_task_document, validate_task_documents,
-};
+use gameforge_persistence::ProjectionStore;
+use gameforge_project_documents::{TaskDocument, TaskDocumentStatus};
 use gameforge_runtime::{
     ProjectWriterLease, QueuedRun, ScheduleConfig, ScheduleSnapshot, plan_schedule,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectValidation {
-    pub task_count: usize,
-    pub integration_order: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectSnapshot {
-    pub projection_revision: u64,
-    pub development_board: Vec<DevelopmentBoardRow>,
-    pub inbox: Vec<InboxRow>,
-}
 
 pub struct ProjectSession {
     snapshot: ProjectSnapshot,
@@ -317,6 +316,82 @@ impl ProjectSession {
         Ok(self.snapshot.clone())
     }
 
+    pub fn record_agent_completed(
+        &mut self,
+        context: &CommandContext,
+        run_id: &str,
+        agent_session_id: &str,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        validate_command_context(context)?;
+        validate_required("agent_session_id", agent_session_id)?;
+        let (run, latest) = self.task_run_history(run_id)?;
+        let domain_events = decide_task_run(&run, TaskRunCommand::StartLocalChecks)
+            .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        if domain_events != [TaskRunEvent::LocalChecksStarted] {
+            return Err(BootstrapError::InvalidCommand(
+                "agent completion must start Local Checks".to_owned(),
+            ));
+        }
+        let mut payload = BTreeMap::new();
+        payload.insert("agent_session_id".to_owned(), agent_session_id.to_owned());
+        let event = execution_update_event(context, &run, &latest, "LOCAL_CHECKING", payload)?;
+        self.journal
+            .append(&event)
+            .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+        self.projection
+            .apply_event(&event)
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+        self.refresh_snapshot()?;
+        Ok(self.snapshot.clone())
+    }
+
+    pub fn record_agent_failed(
+        &mut self,
+        context: &CommandContext,
+        run_id: &str,
+        detail: &str,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        validate_command_context(context)?;
+        validate_required("failure_detail", detail)?;
+        let (run, latest) = self.task_run_history(run_id)?;
+        let domain_events = decide_task_run(
+            &run,
+            TaskRunCommand::Fail {
+                reason: detail.to_owned(),
+            },
+        )
+        .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        if domain_events
+            != [TaskRunEvent::Failed {
+                reason: detail.to_owned(),
+            }]
+        {
+            return Err(BootstrapError::InvalidCommand(
+                "agent failure must fail the Task Run".to_owned(),
+            ));
+        }
+        let mut payload = BTreeMap::new();
+        payload.insert("failure_detail".to_owned(), detail.to_owned());
+        let event = execution_update_event(context, &run, &latest, "FAILED", payload)?;
+        self.journal
+            .append(&event)
+            .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+        self.projection
+            .apply_event(&event)
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+        self.refresh_snapshot()?;
+        Ok(self.snapshot.clone())
+    }
+
+    pub(crate) fn preparing_run_ids(&self) -> Vec<String> {
+        self.snapshot
+            .development_board
+            .iter()
+            .filter(|row| row.run_status.as_deref() == Some("PREPARING"))
+            .filter_map(|row| row.current_run_id.clone())
+            .collect()
+    }
+
     fn queue_task_run(
         &mut self,
         context: CommandContext,
@@ -598,10 +673,9 @@ impl ProjectSession {
                         start_blocker: None,
                     });
                 }
-                Some(
-                    "PREPARING" | "AGENT_RUNNING" | "INPUT_REQUIRED" | "DECISION_REQUIRED"
-                    | "LOCAL_CHECKING",
-                ) => running.push(run_id.to_owned()),
+                Some("PREPARING" | "AGENT_RUNNING" | "INPUT_REQUIRED" | "DECISION_REQUIRED") => {
+                    running.push(run_id.to_owned());
+                }
                 _ => {}
             }
         }
@@ -663,6 +737,14 @@ impl ProjectSession {
                 }
                 Some("AGENT_RUNNING") => TaskRunEvent::AgentStarted,
                 Some("INPUT_REQUIRED") => TaskRunEvent::InputRequired,
+                Some("LOCAL_CHECKING") => TaskRunEvent::LocalChecksStarted,
+                Some("FAILED") => TaskRunEvent::Failed {
+                    reason: event
+                        .payload()
+                        .get("failure_detail")
+                        .cloned()
+                        .unwrap_or_else(|| "agent execution failed".to_owned()),
+                },
                 Some("CANCELLED") => TaskRunEvent::Cancelled,
                 Some(state) => {
                     return Err(BootstrapError::Journal(format!(
@@ -768,186 +850,6 @@ impl ProjectSession {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandContext {
-    pub command_id: String,
-    pub actor: String,
-    pub occurred_at: String,
-    pub base_commit: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BootstrapError {
-    Io(String),
-    NoTaskDocuments,
-    Document(String),
-    Journal(String),
-    Projection(String),
-    Coordinator(String),
-    InvalidCommand(String),
-    UnsupportedCommand(String),
-    CommandIdConflict(String),
-    ProjectionRevisionConflict {
-        expected: u64,
-        actual: u64,
-    },
-    TaskNotFound(String),
-    TaskNotReady(String),
-    TaskAlreadyHasRun(String),
-    RunNotFound(String),
-    RunNotPreparing {
-        run_id: String,
-        actual: Option<String>,
-    },
-    OperationOutcomeUnknown(String),
-    InputRequestAlreadyExists(String),
-    InputRequestNotFound(String),
-    InputRequestNotPending {
-        request_id: String,
-        actual: String,
-    },
-    RunStateConflict {
-        run_id: String,
-        expected: &'static str,
-        actual: Option<String>,
-    },
-}
-
-impl fmt::Display for BootstrapError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => write!(formatter, "project I/O failed: {error}"),
-            Self::NoTaskDocuments => formatter.write_str("no Task documents were found"),
-            Self::Document(error) => write!(formatter, "Task document validation failed: {error}"),
-            Self::Journal(error) => write!(formatter, "Event Journal failed: {error}"),
-            Self::Projection(error) => write!(formatter, "Read Model failed: {error}"),
-            Self::Coordinator(error) => write!(formatter, "ProjectCoordinator failed: {error}"),
-            Self::InvalidCommand(error) => write!(formatter, "invalid command: {error}"),
-            Self::UnsupportedCommand(command) => {
-                write!(formatter, "unsupported command: {command}")
-            }
-            Self::CommandIdConflict(command_id) => {
-                write!(
-                    formatter,
-                    "command ID was reused with different content: {command_id}"
-                )
-            }
-            Self::ProjectionRevisionConflict { expected, actual } => write!(
-                formatter,
-                "projection revision conflict: expected {expected}, actual {actual}"
-            ),
-            Self::TaskNotFound(task_id) => write!(formatter, "Task not found: {task_id}"),
-            Self::TaskNotReady(task_id) => write!(formatter, "Task is not READY: {task_id}"),
-            Self::TaskAlreadyHasRun(task_id) => {
-                write!(formatter, "Task already has a Run: {task_id}")
-            }
-            Self::RunNotFound(run_id) => write!(formatter, "Task Run not found: {run_id}"),
-            Self::RunNotPreparing { run_id, actual } => write!(
-                formatter,
-                "Task Run is not PREPARING: {run_id} ({})",
-                actual.as_deref().unwrap_or("NO_RUN_STATUS")
-            ),
-            Self::OperationOutcomeUnknown(command_id) => write!(
-                formatter,
-                "external operation outcome is unknown: {command_id}"
-            ),
-            Self::InputRequestAlreadyExists(request_id) => {
-                write!(formatter, "Input request already exists: {request_id}")
-            }
-            Self::InputRequestNotFound(request_id) => {
-                write!(formatter, "Input request not found: {request_id}")
-            }
-            Self::InputRequestNotPending { request_id, actual } => write!(
-                formatter,
-                "Input request is not PENDING: {request_id} ({actual})"
-            ),
-            Self::RunStateConflict {
-                run_id,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "Task Run state conflict: {run_id} expected {expected}, actual {}",
-                actual.as_deref().unwrap_or("NO_RUN_STATUS")
-            ),
-        }
-    }
-}
-
-impl std::error::Error for BootstrapError {}
-
-impl From<std::io::Error> for BootstrapError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error.to_string())
-    }
-}
-
-pub fn validate_project(
-    project_root: impl AsRef<Path>,
-) -> Result<ProjectValidation, BootstrapError> {
-    let documents = load_task_documents(project_root.as_ref())?;
-    let order = validate_task_documents(&documents)
-        .map_err(|error| BootstrapError::Document(error.to_string()))?;
-    Ok(ProjectValidation {
-        task_count: documents.len(),
-        integration_order: order
-            .into_iter()
-            .map(|task_id| task_id.as_str().to_owned())
-            .collect(),
-    })
-}
-
-pub fn rebuild_project(
-    project_root: impl AsRef<Path>,
-    coordinator_instance_id: &str,
-) -> Result<ProjectSnapshot, BootstrapError> {
-    let session = start_project(project_root, coordinator_instance_id)?;
-    Ok(session.snapshot().clone())
-}
-
-pub fn start_project(
-    project_root: impl AsRef<Path>,
-    coordinator_instance_id: &str,
-) -> Result<ProjectSession, BootstrapError> {
-    let project_root = project_root.as_ref();
-    let writer_lease = ProjectWriterLease::acquire(project_root, coordinator_instance_id, 1)
-        .map_err(|error| BootstrapError::Coordinator(error.to_string()))?;
-    let documents = load_task_documents(project_root)?;
-    validate_task_documents(&documents)
-        .map_err(|error| BootstrapError::Document(error.to_string()))?;
-
-    let game_dev = project_root.join(".game-dev");
-    let events_directory = game_dev.join("events");
-    fs::create_dir_all(&events_directory).map_err(BootstrapError::from)?;
-    let journal = EventJournal::open(events_directory.join("events.jsonl"))
-        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
-    let mut projection = ProjectionStore::open(game_dev.join("read-model.sqlite"))
-        .map_err(|error| BootstrapError::Projection(error.to_string()))?;
-    projection
-        .rebuild(&documents, journal.events())
-        .map_err(|error| BootstrapError::Projection(error.to_string()))?;
-
-    let snapshot = ProjectSnapshot {
-        projection_revision: projection
-            .projection_revision()
-            .map_err(|error| BootstrapError::Projection(error.to_string()))?,
-        development_board: projection
-            .development_board_rows()
-            .map_err(|error| BootstrapError::Projection(error.to_string()))?,
-        inbox: projection
-            .inbox_rows()
-            .map_err(|error| BootstrapError::Projection(error.to_string()))?,
-    };
-
-    Ok(ProjectSession {
-        snapshot,
-        documents,
-        journal,
-        projection,
-        _writer_lease: writer_lease,
-    })
-}
-
 fn validate_command_context(context: &CommandContext) -> Result<(), BootstrapError> {
     for (field, value) in [
         ("command_id", context.command_id.as_str()),
@@ -972,257 +874,4 @@ fn validate_required(field: &'static str, value: &str) -> Result<(), BootstrapEr
     } else {
         Ok(())
     }
-}
-
-fn queued_event(
-    context: &CommandContext,
-    task_run: &TaskRun,
-    expected_projection_revision: u64,
-) -> Result<EventEnvelope, BootstrapError> {
-    let run_id = task_run.id().as_str();
-    let mut payload = BTreeMap::new();
-    payload.insert("task_id".to_owned(), task_run.task_id().as_str().to_owned());
-    payload.insert("run_id".to_owned(), run_id.to_owned());
-    payload.insert("state".to_owned(), "QUEUED".to_owned());
-    payload.insert(
-        "contract_revision".to_owned(),
-        task_run.contract_revision().get().to_string(),
-    );
-    payload.insert(
-        "base_commit".to_owned(),
-        task_run.base_commit().as_str().to_owned(),
-    );
-    payload.insert(
-        "expected_projection_revision".to_owned(),
-        expected_projection_revision.to_string(),
-    );
-    let aggregate = AggregateRef::new("TaskRun", run_id)
-        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
-    EventEnvelope::new(
-        EventHeader {
-            event_id: format!("EVT-{}", context.command_id),
-            schema_version: SUPPORTED_SCHEMA_VERSION,
-            occurred_at: context.occurred_at.clone(),
-            aggregate,
-            aggregate_version: 1,
-            correlation_id: context.command_id.clone(),
-            causation_id: None,
-            actor: context.actor.clone(),
-        },
-        "TaskRunQueued",
-        payload,
-    )
-    .map_err(|error| BootstrapError::Journal(error.to_string()))
-}
-
-fn cancelled_event(
-    context: &CommandContext,
-    run: &TaskRun,
-    latest: &EventEnvelope,
-    expected_projection_revision: u64,
-) -> Result<EventEnvelope, BootstrapError> {
-    let run_id = run.id().as_str();
-    let mut payload = BTreeMap::new();
-    payload.insert("task_id".to_owned(), run.task_id().as_str().to_owned());
-    payload.insert("run_id".to_owned(), run_id.to_owned());
-    payload.insert("state".to_owned(), "CANCELLED".to_owned());
-    payload.insert(
-        "expected_projection_revision".to_owned(),
-        expected_projection_revision.to_string(),
-    );
-    let aggregate = AggregateRef::new("TaskRun", run_id)
-        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
-    EventEnvelope::new(
-        EventHeader {
-            event_id: format!("EVT-{}-CANCELLED", context.command_id),
-            schema_version: SUPPORTED_SCHEMA_VERSION,
-            occurred_at: context.occurred_at.clone(),
-            aggregate,
-            aggregate_version: latest.header().aggregate_version + 1,
-            correlation_id: context.command_id.clone(),
-            causation_id: Some(latest.header().event_id.clone()),
-            actor: context.actor.clone(),
-        },
-        "TaskRunStateChanged",
-        payload,
-    )
-    .map_err(|error| BootstrapError::Journal(error.to_string()))
-}
-
-fn input_required_event(
-    context: &CommandContext,
-    run: &TaskRun,
-    latest: &EventEnvelope,
-    request_id: &str,
-    prompt: &str,
-    expected_projection_revision: u64,
-) -> Result<EventEnvelope, BootstrapError> {
-    let run_id = run.id().as_str();
-    let mut payload = BTreeMap::new();
-    payload.insert("task_id".to_owned(), run.task_id().as_str().to_owned());
-    payload.insert("run_id".to_owned(), run_id.to_owned());
-    payload.insert("state".to_owned(), "INPUT_REQUIRED".to_owned());
-    payload.insert("request_id".to_owned(), request_id.to_owned());
-    payload.insert("request_prompt".to_owned(), prompt.to_owned());
-    payload.insert(
-        "expected_projection_revision".to_owned(),
-        expected_projection_revision.to_string(),
-    );
-    let aggregate = AggregateRef::new("TaskRun", run_id)
-        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
-    EventEnvelope::new(
-        EventHeader {
-            event_id: format!("EVT-{}-INPUT-REQUIRED", context.command_id),
-            schema_version: SUPPORTED_SCHEMA_VERSION,
-            occurred_at: context.occurred_at.clone(),
-            aggregate,
-            aggregate_version: latest.header().aggregate_version + 1,
-            correlation_id: context.command_id.clone(),
-            causation_id: Some(latest.header().event_id.clone()),
-            actor: context.actor.clone(),
-        },
-        "TaskRunStateChanged",
-        payload,
-    )
-    .map_err(|error| BootstrapError::Journal(error.to_string()))
-}
-
-fn input_answered_event(
-    context: &CommandContext,
-    run: &TaskRun,
-    latest: &EventEnvelope,
-    request_id: &str,
-    answer: &str,
-    expected_projection_revision: u64,
-) -> Result<EventEnvelope, BootstrapError> {
-    let run_id = run.id().as_str();
-    let mut payload = BTreeMap::new();
-    payload.insert("task_id".to_owned(), run.task_id().as_str().to_owned());
-    payload.insert("run_id".to_owned(), run_id.to_owned());
-    payload.insert("state".to_owned(), "AGENT_RUNNING".to_owned());
-    payload.insert("resolved_request_id".to_owned(), request_id.to_owned());
-    payload.insert("resolution_kind".to_owned(), "INPUT_ANSWERED".to_owned());
-    payload.insert("input_answer".to_owned(), answer.to_owned());
-    payload.insert(
-        "expected_projection_revision".to_owned(),
-        expected_projection_revision.to_string(),
-    );
-    let aggregate = AggregateRef::new("TaskRun", run_id)
-        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
-    EventEnvelope::new(
-        EventHeader {
-            event_id: format!("EVT-{}-INPUT-ANSWERED", context.command_id),
-            schema_version: SUPPORTED_SCHEMA_VERSION,
-            occurred_at: context.occurred_at.clone(),
-            aggregate,
-            aggregate_version: latest.header().aggregate_version + 1,
-            correlation_id: context.command_id.clone(),
-            causation_id: Some(latest.header().event_id.clone()),
-            actor: context.actor.clone(),
-        },
-        "TaskRunStateChanged",
-        payload,
-    )
-    .map_err(|error| BootstrapError::Journal(error.to_string()))
-}
-
-fn start_requested_event(
-    context: &CommandContext,
-    request: &RunLaunchRequest,
-    preparation: &EventEnvelope,
-) -> Result<EventEnvelope, BootstrapError> {
-    let mut payload = BTreeMap::new();
-    payload.insert("task_id".to_owned(), request.task_id.clone());
-    payload.insert("run_id".to_owned(), request.task_run_id.clone());
-    payload.insert(
-        "contract_revision".to_owned(),
-        request.contract_revision.to_string(),
-    );
-    payload.insert("base_commit".to_owned(), request.base_commit.clone());
-    let aggregate = AggregateRef::new("Operation", format!("OP-{}-START", context.command_id))
-        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
-    EventEnvelope::new(
-        EventHeader {
-            event_id: format!("EVT-{}-START-REQUESTED", context.command_id),
-            schema_version: SUPPORTED_SCHEMA_VERSION,
-            occurred_at: context.occurred_at.clone(),
-            aggregate,
-            aggregate_version: 1,
-            correlation_id: context.command_id.clone(),
-            causation_id: Some(preparation.header().event_id.clone()),
-            actor: context.actor.clone(),
-        },
-        "TaskRunStartRequested",
-        payload,
-    )
-    .map_err(|error| BootstrapError::Journal(error.to_string()))
-}
-
-fn supervisor_state_event(
-    context: &CommandContext,
-    request: &RunLaunchRequest,
-    preparation: &EventEnvelope,
-    requested: &EventEnvelope,
-    state: &str,
-    mut outcome_payload: BTreeMap<String, String>,
-) -> Result<EventEnvelope, BootstrapError> {
-    outcome_payload.insert("task_id".to_owned(), request.task_id.clone());
-    outcome_payload.insert("run_id".to_owned(), request.task_run_id.clone());
-    outcome_payload.insert("state".to_owned(), state.to_owned());
-    let aggregate = AggregateRef::new("TaskRun", &request.task_run_id)
-        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
-    EventEnvelope::new(
-        EventHeader {
-            event_id: format!("EVT-{}-{}", context.command_id, state),
-            schema_version: SUPPORTED_SCHEMA_VERSION,
-            occurred_at: context.occurred_at.clone(),
-            aggregate,
-            aggregate_version: preparation.header().aggregate_version + 1,
-            correlation_id: context.command_id.clone(),
-            causation_id: Some(requested.header().event_id.clone()),
-            actor: context.actor.clone(),
-        },
-        "TaskRunStateChanged",
-        outcome_payload,
-    )
-    .map_err(|error| BootstrapError::Journal(error.to_string()))
-}
-
-fn event_payload<'a>(
-    event: &'a EventEnvelope,
-    field: &'static str,
-) -> Result<&'a str, BootstrapError> {
-    event
-        .payload()
-        .get(field)
-        .map(String::as_str)
-        .ok_or_else(|| {
-            BootstrapError::Journal(format!(
-                "{} event is missing payload field {field}",
-                event.event_type()
-            ))
-        })
-}
-
-fn load_task_documents(project_root: &Path) -> Result<Vec<TaskDocument>, BootstrapError> {
-    let tasks_directory = project_root.join(".game-dev/tasks");
-    let entries = fs::read_dir(&tasks_directory).map_err(BootstrapError::from)?;
-    let mut paths = entries
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(BootstrapError::from)?;
-    paths.retain(|path| path.extension().is_some_and(|extension| extension == "md"));
-    paths.sort();
-    if paths.is_empty() {
-        return Err(BootstrapError::NoTaskDocuments);
-    }
-
-    paths
-        .into_iter()
-        .map(|path| {
-            let source = fs::read_to_string(&path).map_err(BootstrapError::from)?;
-            load_task_document(&source)
-                .map_err(|error| BootstrapError::Document(format!("{}: {error}", path.display())))
-        })
-        .collect()
 }

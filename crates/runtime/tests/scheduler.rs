@@ -100,3 +100,22 @@ fn blocked_run_does_not_consume_capacity_needed_by_the_next_eligible_run() {
         }]
     );
 }
+
+#[test]
+fn default_schedule_capacity_starts_three_runs() {
+    let snapshot = ScheduleSnapshot {
+        queued: vec![
+            queued("RUN-1", 0, "2026-08-01T10:00:00+09:00"),
+            queued("RUN-2", 0, "2026-08-01T10:01:00+09:00"),
+            queued("RUN-3", 0, "2026-08-01T10:02:00+09:00"),
+            queued("RUN-4", 0, "2026-08-01T10:03:00+09:00"),
+        ],
+        running: Vec::new(),
+    };
+
+    let plan = plan_schedule(&snapshot, &ScheduleConfig::default());
+
+    assert_eq!(plan.start, ["RUN-1", "RUN-2", "RUN-3"]);
+    assert_eq!(plan.defer.len(), 1);
+    assert_eq!(plan.defer[0].task_run_id, "RUN-4");
+}

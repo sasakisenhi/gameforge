@@ -19,15 +19,24 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 - Run取消しのEvent Journal永続化、再送冪等性、取消後の再Queue
 - Agent入力要求のEvent Journal永続化とInbox Read Model
 - Inbox回答のEvent Journal永続化とAgent Run再開
-- 決定的な優先順と実行上限1を守るScheduler Policy
+- 決定的な優先順と設定可能な実行上限（既定3）を守るScheduler Policy
 - 外部起動前のOperation記録と、lease取得結果を扱うRun Supervisor境界
+- Task RunごとのGit worktree作成とCodex App Server起動を行う実`RunExecutionPort`
+- Codexの完了・失敗・入力要求とRun取消しを監視し、空いた実行枠を補充するCoordinator worker
 
 ## Desktop
 
 サンプルプロジェクトのRead Modelを再構築し、Development Boardをネイティブウィンドウで開きます。
+Taskを実行するには、認証済みの`codex` CLIが`PATH`上に必要です。
 
 ```console
 cargo run -p gameforge-desktop -- examples/powder-game
+```
+
+並列上限は既定で3です。正の整数を環境変数で指定できます。
+
+```console
+GAMEFORGE_MAX_CONCURRENT_TASK_RUNS=5 cargo run -p gameforge-desktop -- examples/powder-game
 ```
 
 画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Project Sessionが`TaskRunQueued`をEvent Journalへ記録します。続けてSchedulerがQueueを評価し、容量が空いていれば最初のTask Runを`PREPARING`へ進めてRead Modelと画面を更新します。同じcommand IDの再送は重複記録せず、古いProjection revisionからの操作は変更前に拒否します。
@@ -38,9 +47,11 @@ Agentから入力が必要になったRunは`INPUT_REQUIRED`へ遷移し、要�
 
 `PENDING`の入力要求にはInboxから回答できます。空回答、切断中、古いProjection、解決済み要求は送信前に拒否します。回答はEvent Journalへ記録され、Inbox itemを`ANSWERED`へ更新すると同時にRunを`AGENT_RUNNING`へ戻します。
 
-現在の実行容量は1です。実行中のRunがある場合、後続Runは`QUEUED`に留まります。Run Supervisorは外部Adapterを呼ぶ前に`TaskRunStartRequested`を記録し、資源lease・worktree lease・agent sessionが揃った場合だけ`AGENT_RUNNING`へ進めます。資源を確保できない場合はRunを失敗扱いせず`QUEUED`へ戻し、後から再スケジュールできます。
+Run Supervisorは外部Adapterを呼ぶ前に`TaskRunStartRequested`を記録し、Git worktreeとCodex threadを実際に作成できた場合だけ`AGENT_RUNNING`へ進めます。Task Contractをpromptへ含め、各worktree内でCodex App Serverの`thread/start`と`turn/start`を実行します。Codexは`workspace-write`、network無効、承認要求なしで起動します。
 
-現時点のSupervisor受け入れ確認にはfake Adapterを使い、実際のworktreeやCodex processは起動しません。Desktopへ実Adapterを注入する縦切りは後続Taskで行い、それまでは実体のないRunを`AGENT_RUNNING`として表示しません。
+Coordinator workerは250ms間隔でCodexの通知を監視します。turn完了時はRunを`LOCAL_CHECKING`、異常終了時は`FAILED`へ進め、取消時はCodex processを停止します。いずれも実行枠を解放した直後にQueueを再評価するため、待機中のRunが自動的に開始されます。資源を確保できない場合はRunを失敗扱いせず`QUEUED`へ戻し、後から再スケジュールします。worktreeは取消し・完了後も成果物確認と後続統合のため保持します。
+
+実行ログは`.game-dev/runtime/runs/<run-id>/`、worktreeは`.game-dev/worktrees/<run-id>/`に作成します。Codex turn後のローカルcheck実行と統合処理は、この縦切りの次段階です。
 
 ## CLI
 
@@ -62,7 +73,11 @@ cargo run -p gameforge-cli -- rebuild examples/powder-game
 examples/powder-game/.game-dev/
 ├── events/events.jsonl
 ├── read-model.sqlite
-└── runtime/
+├── runtime/
+│   └── runs/<run-id>/
+│       ├── codex-events.jsonl
+│       └── codex-stderr.log
+└── worktrees/<run-id>/
 ```
 
 ## 開発時の確認

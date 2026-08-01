@@ -1,11 +1,8 @@
 use std::{
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
-    sync::{
-        Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
+    sync::OnceLock,
+    time::Duration,
 };
 
 use dioxus::prelude::*;
@@ -13,13 +10,17 @@ use gameforge_application::{
     AppShellContext, AppShellView, ApplicationCommand, ConnectionState,
     compose_app_shell_with_inbox,
 };
-use gameforge_bootstrap::{BootstrapError, CommandContext, ProjectSession, start_project};
-use gameforge_desktop::{App, CommandResult};
+use gameforge_bootstrap::{BootstrapError, ProjectCoordinator, start_project};
+use gameforge_codex_adapter::{CodexRunExecution, CodexRunExecutionConfig};
+use gameforge_desktop::{
+    App, CommandResult, CoordinatorWorker, CoordinatorWorkerContext, DesktopConfig,
+    spawn_coordinator_worker,
+};
 use gameforge_runtime::ScheduleConfig;
 
 static INITIAL_VIEW: OnceLock<AppShellView> = OnceLock::new();
-static PROJECT_SESSION: OnceLock<Mutex<ProjectSession>> = OnceLock::new();
-static NEXT_COMMAND: AtomicU64 = AtomicU64::new(1);
+static COORDINATOR: OnceLock<CoordinatorWorker> = OnceLock::new();
+static DESKTOP_CONFIG: OnceLock<DesktopConfig> = OnceLock::new();
 
 fn main() {
     if let Err(error) = run() {
@@ -38,12 +39,31 @@ fn run() -> Result<(), BootstrapError> {
         .unwrap_or("GameForge Project")
         .to_owned();
     let coordinator_id = format!("desktop-{}", std::process::id());
-    let mut session = start_project(&project_root, &coordinator_id)?;
+    let config = DesktopConfig::from_env()
+        .map_err(|error| BootstrapError::Coordinator(error.to_string()))?;
     let main_commit = resolve_main_commit(&project_root);
-    let snapshot = session.run_scheduler(
-        next_command_context(&main_commit, "startup-scheduler"),
-        single_run_config(),
+    let session = start_project(&project_root, &coordinator_id)?;
+    let execution = CodexRunExecution::new(CodexRunExecutionConfig::for_project(
+        &project_root,
+        config.max_concurrent_task_runs(),
+    ))
+    .map_err(|error| BootstrapError::RunExecution(error.to_string()))?;
+    let coordinator = ProjectCoordinator::new(
+        session,
+        execution,
+        ScheduleConfig {
+            max_concurrent_task_runs: config.max_concurrent_task_runs(),
+        },
+    );
+    let worker = spawn_coordinator_worker(
+        coordinator,
+        CoordinatorWorkerContext {
+            actor: coordinator_id,
+            base_commit: main_commit.clone(),
+        },
+        Duration::from_millis(250),
     )?;
+    let snapshot = worker.snapshot()?;
     let view = compose_app_shell_with_inbox(
         AppShellContext {
             project_name,
@@ -54,7 +74,7 @@ fn run() -> Result<(), BootstrapError> {
             last_synced_at: "起動時".to_owned(),
             is_stale: false,
             inbox_count: snapshot.inbox.len(),
-            max_concurrent_task_runs: 1,
+            max_concurrent_task_runs: config.max_concurrent_task_runs(),
         },
         snapshot.development_board,
         snapshot.inbox,
@@ -62,8 +82,11 @@ fn run() -> Result<(), BootstrapError> {
     INITIAL_VIEW.set(view).map_err(|_| {
         BootstrapError::Coordinator("initial view is already initialized".to_owned())
     })?;
-    PROJECT_SESSION.set(Mutex::new(session)).map_err(|_| {
-        BootstrapError::Coordinator("project session is already initialized".to_owned())
+    COORDINATOR.set(worker).map_err(|_| {
+        BootstrapError::Coordinator("coordinator worker is already initialized".to_owned())
+    })?;
+    DESKTOP_CONFIG.set(config).map_err(|_| {
+        BootstrapError::Coordinator("desktop config is already initialized".to_owned())
     })?;
 
     dioxus::launch(desktop_root);
@@ -87,32 +110,15 @@ fn execute_application_command(command: ApplicationCommand) -> CommandResult {
     let Some(initial_view) = INITIAL_VIEW.get() else {
         return CommandResult::Failed("初期Viewが利用できません".to_owned());
     };
-    let occurred_at = current_timestamp();
-    let context = next_command_context(&initial_view.main_commit, "client-command");
-    let Some(session) = PROJECT_SESSION.get() else {
-        return CommandResult::Failed("Project Sessionが利用できません".to_owned());
+    let Some(coordinator) = COORDINATOR.get() else {
+        return CommandResult::Failed("Coordinatorが利用できません".to_owned());
     };
-    let snapshot = match session
-        .lock()
-        .map_err(|_| "Project Sessionのロックが破損しました".to_owned())
-        .and_then(|mut session| {
-            let should_schedule = matches!(command, ApplicationCommand::QueueTaskRun { .. });
-            let snapshot = session
-                .execute(context, command)
-                .map_err(|error| error.to_string())?;
-            if should_schedule {
-                session
-                    .run_scheduler(
-                        next_command_context(&initial_view.main_commit, "scheduler-tick"),
-                        single_run_config(),
-                    )
-                    .map_err(|error| error.to_string())
-            } else {
-                Ok(snapshot)
-            }
-        }) {
+    let snapshot = match coordinator.execute(command) {
         Ok(snapshot) => snapshot,
-        Err(error) => return CommandResult::Failed(error),
+        Err(error) => return CommandResult::Failed(error.to_string()),
+    };
+    let Some(config) = DESKTOP_CONFIG.get().copied() else {
+        return CommandResult::Failed("Desktop設定が利用できません".to_owned());
     };
 
     CommandResult::Applied(Box::new(compose_app_shell_with_inbox(
@@ -122,33 +128,14 @@ fn execute_application_command(command: ApplicationCommand) -> CommandResult {
             main_commit: initial_view.main_commit.clone(),
             connection: ConnectionState::Connected,
             projection_revision: snapshot.projection_revision,
-            last_synced_at: occurred_at,
+            last_synced_at: "command applied".to_owned(),
             is_stale: false,
             inbox_count: snapshot.inbox.len(),
-            max_concurrent_task_runs: 1,
+            max_concurrent_task_runs: config.max_concurrent_task_runs(),
         },
         snapshot.development_board,
         snapshot.inbox,
     )))
-}
-
-fn next_command_context(base_commit: &str, operation: &str) -> CommandContext {
-    CommandContext {
-        command_id: format!(
-            "desktop-{}-{operation}-{}",
-            std::process::id(),
-            NEXT_COMMAND.fetch_add(1, Ordering::Relaxed)
-        ),
-        actor: format!("desktop-{}", std::process::id()),
-        occurred_at: current_timestamp(),
-        base_commit: base_commit.to_owned(),
-    }
-}
-
-const fn single_run_config() -> ScheduleConfig {
-    ScheduleConfig {
-        max_concurrent_task_runs: 1,
-    }
 }
 
 fn resolve_main_commit(project_root: &Path) -> String {
@@ -172,11 +159,4 @@ fn resolve_main_commit(project_root: &Path) -> String {
 
 fn valid_commit(commit: &str) -> bool {
     matches!(commit.len(), 40 | 64) && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn current_timestamp() -> String {
-    let milliseconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    format!("unix-ms:{milliseconds}")
 }

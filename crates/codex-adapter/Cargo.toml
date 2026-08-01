@@ -1,0 +1,13 @@
+[package]
+name = "gameforge-codex-adapter"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+gameforge-application = { path = "../application" }
+serde_json = "1.0.149"
+
+[lints]
+workspace = true

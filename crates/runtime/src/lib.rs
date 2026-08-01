@@ -4,8 +4,8 @@
 mod scheduler;
 
 pub use scheduler::{
-    DeferralReason, DeferredRun, QueuedRun, ScheduleConfig, SchedulePlan, ScheduleSnapshot,
-    StartBlocker, plan_schedule,
+    DEFAULT_MAX_CONCURRENT_TASK_RUNS, DeferralReason, DeferredRun, QueuedRun, ScheduleConfig,
+    SchedulePlan, ScheduleSnapshot, StartBlocker, plan_schedule,
 };
 
 use std::{
