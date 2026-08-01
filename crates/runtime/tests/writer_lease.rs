@@ -67,10 +67,13 @@ fn a_separate_process_is_detected_and_removes_metadata_on_normal_exit() {
         project.path().canonicalize().unwrap()
     );
 
-    assert!(matches!(
-        ProjectWriterLease::acquire(project.path(), "parent", 1),
-        Err(CoordinatorError::AlreadyOwned { .. })
-    ));
+    let Err(CoordinatorError::AlreadyOwned { owner }) =
+        ProjectWriterLease::acquire(project.path(), "parent", 1)
+    else {
+        panic!("the live writer must be reported as the owner");
+    };
+    assert_eq!(owner.instance_id, "child");
+    assert_eq!(owner.process_id, child.id());
 
     child.stdin.take().unwrap().write_all(b"release\n").unwrap();
     assert!(child.wait().unwrap().success());
