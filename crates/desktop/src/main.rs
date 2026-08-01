@@ -10,7 +10,8 @@ use std::{
 
 use dioxus::prelude::*;
 use gameforge_application::{
-    AppShellContext, AppShellView, ApplicationCommand, ConnectionState, compose_app_shell,
+    AppShellContext, AppShellView, ApplicationCommand, ConnectionState,
+    compose_app_shell_with_inbox,
 };
 use gameforge_bootstrap::{BootstrapError, CommandContext, ProjectSession, start_project};
 use gameforge_desktop::{App, CommandResult};
@@ -43,7 +44,7 @@ fn run() -> Result<(), BootstrapError> {
         next_command_context(&main_commit, "startup-scheduler"),
         single_run_config(),
     )?;
-    let view = compose_app_shell(
+    let view = compose_app_shell_with_inbox(
         AppShellContext {
             project_name,
             project_root: project_root.display().to_string(),
@@ -52,10 +53,11 @@ fn run() -> Result<(), BootstrapError> {
             projection_revision: snapshot.projection_revision,
             last_synced_at: "起動時".to_owned(),
             is_stale: false,
-            inbox_count: 0,
+            inbox_count: snapshot.inbox.len(),
             max_concurrent_task_runs: 1,
         },
         snapshot.development_board,
+        snapshot.inbox,
     );
     INITIAL_VIEW.set(view).map_err(|_| {
         BootstrapError::Coordinator("initial view is already initialized".to_owned())
@@ -113,7 +115,7 @@ fn execute_application_command(command: ApplicationCommand) -> CommandResult {
         Err(error) => return CommandResult::Failed(error),
     };
 
-    CommandResult::Applied(Box::new(compose_app_shell(
+    CommandResult::Applied(Box::new(compose_app_shell_with_inbox(
         AppShellContext {
             project_name: initial_view.project_name.clone(),
             project_root: initial_view.project_root.clone(),
@@ -122,10 +124,11 @@ fn execute_application_command(command: ApplicationCommand) -> CommandResult {
             projection_revision: snapshot.projection_revision,
             last_synced_at: occurred_at,
             is_stale: false,
-            inbox_count: initial_view.inbox_count,
+            inbox_count: snapshot.inbox.len(),
             max_concurrent_task_runs: 1,
         },
         snapshot.development_board,
+        snapshot.inbox,
     )))
 }
 

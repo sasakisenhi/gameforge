@@ -1,6 +1,7 @@
 use gameforge_application::{
     ActionError, AppShellContext, ApplicationCommand, BoardIntent, ConnectionState,
-    DevelopmentBoardRecord, StartedRun, command_for_board_intent, compose_app_shell,
+    DevelopmentBoardRecord, InboxItemRecord, StartedRun, command_for_board_intent,
+    compose_app_shell, compose_app_shell_with_inbox,
 };
 
 fn context(connection: ConnectionState) -> AppShellContext {
@@ -170,4 +171,32 @@ fn started_run_requires_every_external_handle() {
             .to_string(),
         "agent_session_id must not be empty"
     );
+}
+
+#[test]
+fn composes_pending_input_requests_for_the_inbox() {
+    let view = compose_app_shell_with_inbox(
+        context(ConnectionState::Connected),
+        vec![record(
+            "TASK-1",
+            "READY",
+            Some("RUN-1"),
+            Some("INPUT_REQUIRED"),
+        )],
+        vec![InboxItemRecord {
+            request_id: "INPUT-001".to_owned(),
+            task_id: "TASK-1".to_owned(),
+            task_run_id: "RUN-1".to_owned(),
+            request_kind: "INPUT".to_owned(),
+            prompt: "優先方向を選んでください".to_owned(),
+            status: "PENDING".to_owned(),
+            requested_at: "2026-08-01T12:00:00+09:00".to_owned(),
+        }],
+    );
+
+    assert_eq!(view.inbox_count, 1);
+    assert_eq!(view.inbox.pending, 1);
+    assert_eq!(view.inbox.items.len(), 1);
+    assert_eq!(view.inbox.items[0].request_id, "INPUT-001");
+    assert_eq!(view.inbox.items[0].prompt, "優先方向を選んでください");
 }
