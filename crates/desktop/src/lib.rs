@@ -100,6 +100,10 @@ pub fn execute_board_intent(
         }
     };
     let prepared = command_description(&command);
+    let affected_task_id = match &command {
+        ApplicationCommand::QueueTaskRun { task_id, .. } => Some(task_id.clone()),
+        ApplicationCommand::CancelTaskRun { .. } => None,
+    };
     match execute(command) {
         CommandResult::Unavailable => CommandEffect {
             updated_view: None,
@@ -107,19 +111,20 @@ pub fn execute_board_intent(
         },
         CommandResult::Applied(updated_view) => {
             let updated_view = *updated_view;
-            let run_id = updated_view
+            let run = updated_view
                 .development
                 .task_rows
                 .iter()
-                .find_map(|row| {
-                    (row.run_status.as_deref() == Some("QUEUED"))
-                        .then(|| row.current_run_id.clone())
-                        .flatten()
-                })
-                .unwrap_or_else(|| "Run ID未確認".to_owned());
+                .find(|row| Some(&row.task_id) == affected_task_id.as_ref());
+            let run_id = run
+                .and_then(|row| row.current_run_id.as_deref())
+                .unwrap_or("Run ID未確認");
+            let run_status = run
+                .and_then(|row| row.run_status.as_deref())
+                .unwrap_or("状態未確認");
             CommandEffect {
                 notice: format!(
-                    "Queue登録完了: {run_id} / projection rev {}",
+                    "Queue登録完了: {run_id} / {run_status} / projection rev {}",
                     updated_view.projection_revision
                 ),
                 updated_view: Some(updated_view),

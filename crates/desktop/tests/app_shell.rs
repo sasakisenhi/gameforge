@@ -108,17 +108,17 @@ fn reducer_keeps_navigation_filter_and_selection_as_local_ui_state() {
 }
 
 #[test]
-fn queue_action_applies_the_coordinator_view_and_reports_completion() {
+fn queue_action_applies_the_single_scheduler_result_and_reports_preparing() {
     let current = view(ConnectionState::Connected, vec![runnable_row()]);
-    let mut queued = current.clone();
-    queued.projection_revision = 43;
-    queued.development.projection_revision = 43;
-    queued.development.summary.runnable = 0;
-    queued.development.summary.queued = 1;
-    queued.development.task_rows[0].current_run_id = Some("RUN-TASK-READY-1".to_owned());
-    queued.development.task_rows[0].run_status = Some("QUEUED".to_owned());
-    queued.development.task_rows[0].can_queue = false;
-    queued.development.task_rows[0].queue_unavailable_reason =
+    let mut preparing = current.clone();
+    preparing.projection_revision = 44;
+    preparing.development.projection_revision = 44;
+    preparing.development.summary.runnable = 0;
+    preparing.development.summary.running = 1;
+    preparing.development.task_rows[0].current_run_id = Some("RUN-TASK-READY-1".to_owned());
+    preparing.development.task_rows[0].run_status = Some("PREPARING".to_owned());
+    preparing.development.task_rows[0].can_queue = false;
+    preparing.development.task_rows[0].queue_unavailable_reason =
         Some("このTaskには進行中または記録済みのRunがあります".to_owned());
 
     let effect = execute_board_intent(
@@ -134,13 +134,14 @@ fn queue_action_applies_the_coordinator_view_and_reports_completion() {
                     expected_projection_revision: 42,
                 }
             );
-            CommandResult::Applied(Box::new(queued.clone()))
+            CommandResult::Applied(Box::new(preparing.clone()))
         },
     );
 
-    assert_eq!(effect.updated_view, Some(queued));
+    assert_eq!(effect.updated_view, Some(preparing));
     assert!(effect.notice.contains("Queue登録完了"));
     assert!(effect.notice.contains("RUN-TASK-READY-1"));
+    assert!(effect.notice.contains("PREPARING"));
 }
 
 #[test]
