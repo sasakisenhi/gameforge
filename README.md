@@ -64,7 +64,11 @@ examples/powder-game/.game-dev/
 
 ## 開発時の確認
 
+`x86_64-unknown-linux-gnu`ではDesktopリンク時のメモリ使用量と待ち時間を抑えるため、`.cargo/config.toml`で`clang + mold`を使用します。Linuxで開発する場合は`clang`と`mold`が必要です。
+
 ```console
+mold --version
+clang --version
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -j 1 -- -D warnings
 cargo test --workspace -j 1
