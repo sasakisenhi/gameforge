@@ -4,7 +4,10 @@
 use std::{collections::BTreeMap, fmt, fs, path::Path};
 
 use gameforge_application::ApplicationCommand;
-use gameforge_domain::{CommitSha, TaskRun, TaskRunId};
+use gameforge_domain::{
+    CommitSha, ContractRevision, TaskId, TaskRun, TaskRunCommand, TaskRunEvent, TaskRunId,
+    decide_task_run,
+};
 use gameforge_event_journal::{
     AggregateRef, EventEnvelope, EventHeader, EventJournal, SUPPORTED_SCHEMA_VERSION,
 };
@@ -12,7 +15,9 @@ use gameforge_persistence::{DevelopmentBoardRow, ProjectionStore};
 use gameforge_project_documents::{
     TaskDocument, TaskDocumentStatus, load_task_document, validate_task_documents,
 };
-use gameforge_runtime::ProjectWriterLease;
+use gameforge_runtime::{
+    ProjectWriterLease, QueuedRun, ScheduleConfig, ScheduleSnapshot, plan_schedule,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectValidation {
@@ -55,6 +60,52 @@ impl ProjectSession {
                 "CancelTaskRun".to_owned(),
             )),
         }
+    }
+
+    pub fn run_scheduler(
+        &mut self,
+        context: CommandContext,
+        config: ScheduleConfig,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        validate_command_context(&context)?;
+        let previous = self
+            .journal
+            .events()
+            .iter()
+            .filter(|event| event.header().correlation_id == context.command_id)
+            .collect::<Vec<_>>();
+        if !previous.is_empty() {
+            let same_command = previous.iter().all(|event| {
+                event.event_type() == "TaskRunStateChanged"
+                    && event.payload().get("state").map(String::as_str) == Some("PREPARING")
+                    && event
+                        .payload()
+                        .get("max_concurrent_task_runs")
+                        .and_then(|maximum| maximum.parse::<usize>().ok())
+                        == Some(config.max_concurrent_task_runs)
+                    && event.header().actor == context.actor
+                    && event.header().occurred_at == context.occurred_at
+            });
+            return if same_command {
+                Ok(self.snapshot.clone())
+            } else {
+                Err(BootstrapError::CommandIdConflict(context.command_id))
+            };
+        }
+
+        let schedule_snapshot = self.schedule_snapshot()?;
+        let plan = plan_schedule(&schedule_snapshot, &config);
+        for run_id in plan.start {
+            let event = self.preparation_event(&context, config, &run_id)?;
+            self.journal
+                .append(&event)
+                .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+            self.projection
+                .apply_event(&event)
+                .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+        }
+        self.refresh_snapshot()?;
+        Ok(self.snapshot.clone())
     }
 
     fn queue_task_run(
@@ -157,6 +208,100 @@ impl ProjectSession {
                 .map_err(|error| BootstrapError::Projection(error.to_string()))?,
         };
         Ok(())
+    }
+
+    fn schedule_snapshot(&self) -> Result<ScheduleSnapshot, BootstrapError> {
+        let mut queued = Vec::new();
+        let mut running = Vec::new();
+        for row in &self.snapshot.development_board {
+            let Some(run_id) = row.current_run_id.as_deref() else {
+                continue;
+            };
+            match row.run_status.as_deref() {
+                Some("QUEUED") => {
+                    let queued_event = self.queued_event_for_run(run_id)?;
+                    queued.push(QueuedRun {
+                        task_run_id: run_id.to_owned(),
+                        priority: 0,
+                        queued_at: queued_event.header().occurred_at.clone(),
+                        start_blocker: None,
+                    });
+                }
+                Some(
+                    "PREPARING" | "AGENT_RUNNING" | "INPUT_REQUIRED" | "DECISION_REQUIRED"
+                    | "LOCAL_CHECKING",
+                ) => running.push(run_id.to_owned()),
+                _ => {}
+            }
+        }
+        Ok(ScheduleSnapshot { queued, running })
+    }
+
+    fn queued_event_for_run(&self, run_id: &str) -> Result<&EventEnvelope, BootstrapError> {
+        self.journal
+            .events()
+            .iter()
+            .find(|event| {
+                event.event_type() == "TaskRunQueued"
+                    && event.header().aggregate.aggregate_id() == run_id
+            })
+            .ok_or_else(|| {
+                BootstrapError::Journal(format!("TaskRunQueued event not found for {run_id}"))
+            })
+    }
+
+    fn preparation_event(
+        &self,
+        context: &CommandContext,
+        config: ScheduleConfig,
+        run_id: &str,
+    ) -> Result<EventEnvelope, BootstrapError> {
+        let queued = self.queued_event_for_run(run_id)?;
+        let task_id = event_payload(queued, "task_id")?;
+        let contract_revision = event_payload(queued, "contract_revision")?
+            .parse::<u64>()
+            .map_err(|_| BootstrapError::Journal("invalid contract_revision".to_owned()))?;
+        let run = TaskRun::new(
+            TaskRunId::new(run_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
+            TaskId::new(task_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
+            ContractRevision::new(contract_revision)
+                .map_err(|error| BootstrapError::Journal(error.to_string()))?,
+            CommitSha::new(event_payload(queued, "base_commit")?)
+                .map_err(|error| BootstrapError::Journal(error.to_string()))?,
+        );
+        let domain_events = decide_task_run(&run, TaskRunCommand::Prepare)
+            .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        if domain_events != [TaskRunEvent::PreparationStarted] {
+            return Err(BootstrapError::InvalidCommand(
+                "Prepare must emit PreparationStarted".to_owned(),
+            ));
+        }
+
+        let mut payload = BTreeMap::new();
+        payload.insert("task_id".to_owned(), task_id.to_owned());
+        payload.insert("run_id".to_owned(), run_id.to_owned());
+        payload.insert("state".to_owned(), "PREPARING".to_owned());
+        payload.insert(
+            "max_concurrent_task_runs".to_owned(),
+            config.max_concurrent_task_runs.to_string(),
+        );
+        let aggregate = AggregateRef::new("TaskRun", run_id)
+            .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+        EventEnvelope::new(
+            EventHeader {
+                event_id: format!("EVT-{}-{run_id}", context.command_id),
+                schema_version: SUPPORTED_SCHEMA_VERSION,
+                occurred_at: context.occurred_at.clone(),
+                aggregate,
+                aggregate_version: queued.header().aggregate_version + 1,
+                correlation_id: context.command_id.clone(),
+                causation_id: Some(queued.header().event_id.clone()),
+                actor: context.actor.clone(),
+            },
+            "TaskRunStateChanged",
+            payload,
+        )
+        .map_err(|error| BootstrapError::Journal(error.to_string()))
     }
 }
 
@@ -343,6 +488,22 @@ fn queued_event(
         payload,
     )
     .map_err(|error| BootstrapError::Journal(error.to_string()))
+}
+
+fn event_payload<'a>(
+    event: &'a EventEnvelope,
+    field: &'static str,
+) -> Result<&'a str, BootstrapError> {
+    event
+        .payload()
+        .get(field)
+        .map(String::as_str)
+        .ok_or_else(|| {
+            BootstrapError::Journal(format!(
+                "{} event is missing payload field {field}",
+                event.event_type()
+            ))
+        })
 }
 
 fn load_task_documents(project_root: &Path) -> Result<Vec<TaskDocument>, BootstrapError> {
