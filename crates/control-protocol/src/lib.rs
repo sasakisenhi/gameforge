@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use serde_json::Value;
 
 #[derive(Deserialize)]
@@ -17,6 +17,17 @@ struct WireClientHello {
 #[serde(deny_unknown_fields)]
 struct WireServerHello {
     protocol_version: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireCommandEnvelope<T> {
+    command_id: String,
+    project_id: String,
+    client_id: String,
+    expected_aggregate_version: u64,
+    issued_at: String,
+    payload: T,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -171,7 +182,7 @@ pub fn negotiate(client: &ClientHello) -> Result<ServerHello, ProtocolError> {
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandEnvelope<T> {
     command_id: String,
     project_id: String,
@@ -233,6 +244,61 @@ impl<T> CommandEnvelope<T> {
     #[must_use]
     pub const fn payload(&self) -> &T {
         &self.payload
+    }
+
+    pub fn encode_json(&self) -> Result<String, ProtocolError>
+    where
+        T: Serialize,
+    {
+        encode_json(self)
+    }
+
+    pub fn decode_json(json: &str) -> Result<Self, ProtocolError>
+    where
+        T: DeserializeOwned,
+    {
+        let value = parse_json(json)?;
+        validate_object(
+            &value,
+            &[
+                "command_id",
+                "project_id",
+                "client_id",
+                "expected_aggregate_version",
+                "issued_at",
+                "payload",
+            ],
+        )?;
+        let wire: WireCommandEnvelope<T> = decode_json(json)?;
+        Self::new(
+            wire.command_id,
+            wire.project_id,
+            wire.client_id,
+            wire.expected_aggregate_version,
+            wire.issued_at,
+            wire.payload,
+        )
+    }
+}
+
+impl<'de, T> Deserialize<'de> for CommandEnvelope<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = WireCommandEnvelope::deserialize(deserializer)?;
+        Self::new(
+            wire.command_id,
+            wire.project_id,
+            wire.client_id,
+            wire.expected_aggregate_version,
+            wire.issued_at,
+            wire.payload,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 

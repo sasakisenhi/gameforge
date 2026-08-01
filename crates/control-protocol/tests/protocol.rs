@@ -1,6 +1,7 @@
 use gameforge_control_protocol::{
     ClientHello, CommandEnvelope, ProtocolError, ProtocolVersion, ServerHello, negotiate,
 };
+use serde_json::json;
 
 #[test]
 fn accepts_only_the_supported_protocol_version() {
@@ -79,5 +80,75 @@ fn command_envelope_requires_stable_non_empty_ids() {
     assert!(matches!(
         CommandEnvelope::new("", "PROJECT-1", "CLI-1", 4, "now", ()),
         Err(ProtocolError::EmptyField("command_id"))
+    ));
+}
+
+#[test]
+fn command_envelope_json_format_is_stable_and_round_trips() {
+    let envelope = CommandEnvelope::new(
+        "CMD-1",
+        "PROJECT-1",
+        "CLI-1",
+        4,
+        "2026-08-01T12:00:00+09:00",
+        json!({"action": "queue_task_run", "task_id": "TASK-1"}),
+    )
+    .unwrap();
+
+    let encoded = envelope.encode_json().unwrap();
+    assert_eq!(
+        encoded,
+        concat!(
+            r#"{"command_id":"CMD-1","project_id":"PROJECT-1","client_id":"CLI-1","#,
+            r#""expected_aggregate_version":4,"issued_at":"2026-08-01T12:00:00+09:00","#,
+            r#""payload":{"action":"queue_task_run","task_id":"TASK-1"}}"#,
+        )
+    );
+    assert_eq!(
+        CommandEnvelope::<serde_json::Value>::decode_json(&encoded).unwrap(),
+        envelope
+    );
+}
+
+#[test]
+fn command_envelope_decode_rechecks_required_fields() {
+    for (field, json) in [
+        (
+            "command_id",
+            r#"{"command_id":" ","project_id":"PROJECT-1","client_id":"CLI-1","expected_aggregate_version":4,"issued_at":"now","payload":null}"#,
+        ),
+        (
+            "project_id",
+            r#"{"command_id":"CMD-1","project_id":" ","client_id":"CLI-1","expected_aggregate_version":4,"issued_at":"now","payload":null}"#,
+        ),
+        (
+            "client_id",
+            r#"{"command_id":"CMD-1","project_id":"PROJECT-1","client_id":" ","expected_aggregate_version":4,"issued_at":"now","payload":null}"#,
+        ),
+        (
+            "issued_at",
+            r#"{"command_id":"CMD-1","project_id":"PROJECT-1","client_id":"CLI-1","expected_aggregate_version":4,"issued_at":" ","payload":null}"#,
+        ),
+    ] {
+        assert!(matches!(
+            CommandEnvelope::<serde_json::Value>::decode_json(json),
+            Err(ProtocolError::EmptyField(actual)) if actual == field
+        ));
+    }
+}
+
+#[test]
+fn command_envelope_decode_rejects_unknown_fields_and_broken_json() {
+    let unknown = concat!(
+        r#"{"command_id":"CMD-1","project_id":"PROJECT-1","client_id":"CLI-1","#,
+        r#""expected_aggregate_version":4,"issued_at":"now","payload":null,"extra":true}"#,
+    );
+    assert!(matches!(
+        CommandEnvelope::<serde_json::Value>::decode_json(unknown),
+        Err(ProtocolError::UnknownField(field)) if field == "extra"
+    ));
+    assert!(matches!(
+        CommandEnvelope::<serde_json::Value>::decode_json("{not-json}"),
+        Err(ProtocolError::MalformedJson(_))
     ));
 }
