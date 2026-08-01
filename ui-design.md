@@ -703,7 +703,7 @@ User Intent
 
 ### 14.1 Direction
 
-AI製品らしい装飾より、制作コントロールプレーンとしての判読性と信頼感を優先する。dark themeを既定候補とし、情報密度の高いtable、明瞭な階層、控えめなmotionを用いる。
+AI製品らしい装飾より、制作コントロールプレーンとしての判読性と信頼感を優先する。黒鉛、鍛造金属、精密工具を基調としたlight / night themeを持ち、情報密度の高いtable、明瞭な階層、控えめなmotionを用いる。
 
 ### 14.2 Color tokens（dark theme案）
 
@@ -725,6 +725,8 @@ AI製品らしい装飾より、制作コントロールプレーンとしての
 
 実装時にはWCAG contrastを測定し、通常textは4.5:1以上、大きなtextとUI境界は3:1以上を満たすよう調整する。semantic colorは文字、icon、形状と組み合わせる。
 
+Light / Nightの切替はlocal UI stateとして扱い、TaskやProjectのDomain状態へ保存しない。どちらのthemeでも情報階層、semantic colorの意味、操作可能性を変えてはならない。
+
 ### 14.3 Typography
 
 - UI: OS native sans-serifを優先する。
@@ -733,14 +735,21 @@ AI製品らしい装飾より、制作コントロールプレーンとしての
 - 日本語のline-heightは本文1.55以上、table cellは1.4以上を確保する。
 - ALL CAPSを長い日本語labelへ使用しない。Domain enumはcode表示のときだけ大文字を保つ。
 
-### 14.4 Spacing and density
+### 14.4 UI language
+
+- navigation、操作、system status、Domain enumは英語へ統一する。
+- projectで人間が定義したtitleや本文と、長い補足説明は日本語を許容する。
+- 同じ階層の概念を英語と日本語で混在させない。たとえば`HUMAN WAIT`はTask Run状態、`NEEDS REVIEW`は人間の確認件数として区別する。
+- 将来のlocale切替までは、同じcontrol内へ英語と日本語を併記しない。
+
+### 14.5 Spacing and density
 
 - 4px基準のspacing scaleを使う。
 - 通常row高40px、compact table 32px、主要button 36px以上を基準にする。
 - statusを詰め込みすぎず、Overviewでは3個を超えるbadgeを`+N`へまとめ、展開で全件表示する。
 - border radiusは6px前後とし、cardの多重nestingを避ける。
 
-### 14.5 Motion
+### 14.6 Motion
 
 - 状態遷移の強調は150–200msのopacity/background transitionに留める。
 - 実行中spinner以外の常時animationを避ける。
