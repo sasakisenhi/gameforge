@@ -44,6 +44,85 @@ impl fmt::Display for DocumentError {
 
 impl std::error::Error for DocumentError {}
 
+/// A reason why one changed path violates a task contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangedPathViolation {
+    InvalidRelativePath { path: String },
+    ForbiddenPath { path: String, pattern: String },
+    OutsideAllowedAndTestPaths { path: String },
+}
+
+impl ChangedPathViolation {
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::InvalidRelativePath { path }
+            | Self::ForbiddenPath { path, .. }
+            | Self::OutsideAllowedAndTestPaths { path } => path,
+        }
+    }
+
+    const fn sort_order(&self) -> u8 {
+        match self {
+            Self::InvalidRelativePath { .. } => 0,
+            Self::ForbiddenPath { .. } => 1,
+            Self::OutsideAllowedAndTestPaths { .. } => 2,
+        }
+    }
+}
+
+impl fmt::Display for ChangedPathViolation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRelativePath { path } => {
+                write!(formatter, "invalid project-relative changed path: {path}")
+            }
+            Self::ForbiddenPath { path, pattern } => {
+                write!(
+                    formatter,
+                    "changed path matches forbidden pattern {pattern}: {path}"
+                )
+            }
+            Self::OutsideAllowedAndTestPaths { path } => {
+                write!(
+                    formatter,
+                    "changed path is outside allowed_paths and test_paths: {path}"
+                )
+            }
+        }
+    }
+}
+
+/// All changed path violations found in one validation pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedPathValidationError {
+    violations: Vec<ChangedPathViolation>,
+}
+
+impl ChangedPathValidationError {
+    #[must_use]
+    pub fn violations(&self) -> &[ChangedPathViolation] {
+        &self.violations
+    }
+
+    #[must_use]
+    pub fn into_violations(self) -> Vec<ChangedPathViolation> {
+        self.violations
+    }
+}
+
+impl fmt::Display for ChangedPathValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} changed path violation(s)",
+            self.violations.len()
+        )
+    }
+}
+
+impl std::error::Error for ChangedPathValidationError {}
+
 impl From<DomainError> for DocumentError {
     fn from(error: DomainError) -> Self {
         Self::InvalidDomainValue(error.to_string())
@@ -296,6 +375,93 @@ pub fn validate_task_documents(documents: &[TaskDocument]) -> Result<Vec<TaskId>
         .map_err(|error| DocumentError::InvalidTaskGraph(error.to_string()))
 }
 
+/// Validates all changed paths against a task contract.
+///
+/// Forbidden patterns take priority over allowed and test patterns. Violations
+/// are returned in lexicographic path order instead of stopping at the first
+/// invalid path.
+pub fn validate_changed_paths<I, P>(
+    document: &TaskDocument,
+    changed_paths: I,
+) -> Result<(), ChangedPathValidationError>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<str>,
+{
+    let mut violations = changed_paths
+        .into_iter()
+        .filter_map(|path| changed_path_violation(document, path.as_ref()))
+        .collect::<Vec<_>>();
+    violations.sort_by(|left, right| {
+        left.path()
+            .cmp(right.path())
+            .then_with(|| left.sort_order().cmp(&right.sort_order()))
+    });
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(ChangedPathValidationError { violations })
+    }
+}
+
+fn changed_path_violation(
+    document: &TaskDocument,
+    changed_path: &str,
+) -> Option<ChangedPathViolation> {
+    if !is_safe_relative_path(changed_path) {
+        return Some(ChangedPathViolation::InvalidRelativePath {
+            path: changed_path.to_owned(),
+        });
+    }
+
+    if let Some(pattern) = document
+        .forbidden_paths
+        .iter()
+        .filter(|pattern| path_pattern_matches(pattern, changed_path))
+        .min()
+    {
+        return Some(ChangedPathViolation::ForbiddenPath {
+            path: changed_path.to_owned(),
+            pattern: pattern.clone(),
+        });
+    }
+
+    let is_allowed = document
+        .allowed_paths
+        .iter()
+        .chain(&document.test_paths)
+        .any(|pattern| path_pattern_matches(pattern, changed_path));
+    (!is_allowed).then(|| ChangedPathViolation::OutsideAllowedAndTestPaths {
+        path: changed_path.to_owned(),
+    })
+}
+
+fn path_pattern_matches(pattern: &str, path: &str) -> bool {
+    let path_segments = path.split('/').collect::<Vec<_>>();
+    let mut reachable = vec![false; path_segments.len() + 1];
+    reachable[0] = true;
+
+    for pattern_segment in pattern.split('/') {
+        let mut next = vec![false; path_segments.len() + 1];
+        if pattern_segment == "**" {
+            let mut can_match = false;
+            for (index, was_reachable) in reachable.iter().copied().enumerate() {
+                can_match |= was_reachable;
+                next[index] = can_match;
+            }
+        } else {
+            for (index, path_segment) in path_segments.iter().enumerate() {
+                next[index + 1] = reachable[index]
+                    && (pattern_segment == "*" || pattern_segment == *path_segment);
+            }
+        }
+        reachable = next;
+    }
+
+    reachable[path_segments.len()]
+}
+
 fn validate_paths(
     allowed_paths: &[String],
     test_paths: &[String],
@@ -309,15 +475,7 @@ fn validate_paths(
         .chain(test_paths)
         .chain(forbidden_paths)
     {
-        let is_unsafe = path.trim().is_empty()
-            || path.starts_with('/')
-            || path.starts_with('\\')
-            || path.contains('\\')
-            || path.contains(':')
-            || path
-                .split('/')
-                .any(|component| matches!(component, "" | "." | ".."));
-        if is_unsafe {
+        if !is_safe_relative_path(path) {
             return Err(DocumentError::UnsafePath(path.clone()));
         }
     }
@@ -330,4 +488,15 @@ fn validate_paths(
         return Err(DocumentError::ConflictingPath(conflict.clone()));
     }
     Ok(())
+}
+
+fn is_safe_relative_path(path: &str) -> bool {
+    !path.trim().is_empty()
+        && !path.starts_with('/')
+        && !path.starts_with('\\')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && !path
+            .split('/')
+            .any(|component| matches!(component, "" | "." | ".."))
 }
