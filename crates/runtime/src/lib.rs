@@ -1,6 +1,13 @@
 //! Project coordinator runtime and operating-system resource ownership.
 #![allow(clippy::missing_errors_doc)]
 
+mod scheduler;
+
+pub use scheduler::{
+    DeferralReason, DeferredRun, QueuedRun, ScheduleConfig, SchedulePlan, ScheduleSnapshot,
+    StartBlocker, plan_schedule,
+};
+
 use std::{
     fmt, fs,
     fs::{File, OpenOptions},
