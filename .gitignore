@@ -2,4 +2,6 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+**/.game-dev/runtime/
+/examples/**/.game-dev/events/events.jsonl
 
