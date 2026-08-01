@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+gameforge-application = { path = "../application" }
+gameforge-domain = { path = "../domain" }
 gameforge-event-journal = { path = "../event-journal" }
 gameforge-persistence = { path = "../persistence" }
 gameforge-project-documents = { path = "../project-documents" }
@@ -13,4 +15,3 @@ gameforge-runtime = { path = "../runtime" }
 
 [lints]
 workspace = true
-

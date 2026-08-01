@@ -4,7 +4,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use gameforge_bootstrap::{rebuild_project, start_project, validate_project};
+use gameforge_application::ApplicationCommand;
+use gameforge_bootstrap::{
+    BootstrapError, CommandContext, rebuild_project, start_project, validate_project,
+};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -84,4 +87,144 @@ fn project_session_holds_the_single_writer_lease_until_it_is_dropped() {
 
     drop(session);
     start_project(project.path(), "other-coordinator").unwrap();
+}
+
+#[test]
+fn queue_command_records_a_run_updates_the_board_and_survives_restart() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+
+    let snapshot = session
+        .execute(
+            command_context("CMD-001"),
+            ApplicationCommand::QueueTaskRun {
+                task_id: "TASK-001".to_owned(),
+                expected_projection_revision: 0,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(snapshot.projection_revision, 1);
+    assert_eq!(
+        snapshot.development_board[0].current_run_id.as_deref(),
+        Some("RUN-TASK-001-1")
+    );
+    assert_eq!(
+        snapshot.development_board[0].run_status.as_deref(),
+        Some("QUEUED")
+    );
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert!(journal.contains("TaskRunQueued"));
+    assert!(journal.contains("\"contract_revision\":\"1\""));
+    assert!(journal.contains(&format!("\"base_commit\":\"{}\"", "a".repeat(40))));
+
+    drop(session);
+    let restarted = start_project(project.path(), "restarted-coordinator").unwrap();
+    assert_eq!(restarted.snapshot(), &snapshot);
+}
+
+#[test]
+fn retrying_the_same_command_does_not_duplicate_the_run_or_event() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    let command = ApplicationCommand::QueueTaskRun {
+        task_id: "TASK-001".to_owned(),
+        expected_projection_revision: 0,
+    };
+
+    let first = session
+        .execute(command_context("CMD-001"), command.clone())
+        .unwrap();
+    drop(session);
+    let mut restarted = start_project(project.path(), "restarted-coordinator").unwrap();
+    let retried = restarted
+        .execute(command_context("CMD-001"), command)
+        .unwrap();
+
+    assert_eq!(retried, first);
+    assert_eq!(retried.projection_revision, 1);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 1);
+}
+
+#[test]
+fn reusing_a_command_id_with_different_content_is_rejected() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    let command = ApplicationCommand::QueueTaskRun {
+        task_id: "TASK-001".to_owned(),
+        expected_projection_revision: 0,
+    };
+    session
+        .execute(command_context("CMD-001"), command.clone())
+        .unwrap();
+
+    let mut changed_context = command_context("CMD-001");
+    changed_context.base_commit = "b".repeat(40);
+    assert_eq!(
+        session.execute(changed_context, command).unwrap_err(),
+        BootstrapError::CommandIdConflict("CMD-001".to_owned())
+    );
+    assert_eq!(session.snapshot().projection_revision, 1);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 1);
+}
+
+#[test]
+fn stale_projection_or_already_queued_task_is_rejected_without_mutation() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+
+    let stale = session
+        .execute(
+            command_context("CMD-STALE"),
+            ApplicationCommand::QueueTaskRun {
+                task_id: "TASK-001".to_owned(),
+                expected_projection_revision: 9,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(
+        stale,
+        BootstrapError::ProjectionRevisionConflict {
+            expected: 9,
+            actual: 0,
+        }
+    );
+    assert_eq!(session.snapshot().projection_revision, 0);
+
+    session
+        .execute(
+            command_context("CMD-001"),
+            ApplicationCommand::QueueTaskRun {
+                task_id: "TASK-001".to_owned(),
+                expected_projection_revision: 0,
+            },
+        )
+        .unwrap();
+    let already_queued = session
+        .execute(
+            command_context("CMD-002"),
+            ApplicationCommand::QueueTaskRun {
+                task_id: "TASK-001".to_owned(),
+                expected_projection_revision: 1,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(
+        already_queued,
+        BootstrapError::TaskAlreadyHasRun("TASK-001".to_owned())
+    );
+    assert_eq!(session.snapshot().projection_revision, 1);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 1);
+}
+
+fn command_context(command_id: &str) -> CommandContext {
+    CommandContext {
+        command_id: command_id.to_owned(),
+        actor: "desktop-test".to_owned(),
+        occurred_at: "2026-08-01T12:00:00+09:00".to_owned(),
+        base_commit: "a".repeat(40),
+    }
 }
