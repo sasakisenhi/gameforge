@@ -262,6 +262,11 @@ pub enum ApplicationCommand {
         task_run_id: String,
         expected_projection_revision: u64,
     },
+    AnswerInputRequest {
+        request_id: String,
+        answer: String,
+        expected_projection_revision: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

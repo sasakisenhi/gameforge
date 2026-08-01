@@ -583,6 +583,66 @@ fn input_request_is_persisted_in_the_inbox_and_survives_restart() {
     assert_eq!(restarted.snapshot(), &waiting);
 }
 
+#[test]
+fn answering_an_input_request_resumes_the_run_and_survives_restart() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    queue(&mut session, "CMD-QUEUE-1", "TASK-001", 0);
+    session
+        .run_scheduler(
+            command_context("CMD-SCHEDULER-1"),
+            ScheduleConfig {
+                max_concurrent_task_runs: 1,
+            },
+        )
+        .unwrap();
+    session
+        .run_supervisor(
+            &command_context("CMD-SUPERVISOR-1"),
+            "RUN-TASK-001-1",
+            &mut FakeRunExecution::started(project.path().join(".game-dev/events/events.jsonl")),
+        )
+        .unwrap();
+    session
+        .record_input_required(
+            command_context("CMD-INPUT-1"),
+            "RUN-TASK-001-1",
+            "INPUT-001",
+            "砂の優先方向を選んでください",
+            4,
+        )
+        .unwrap();
+    let command = ApplicationCommand::AnswerInputRequest {
+        request_id: "INPUT-001".to_owned(),
+        answer: "左方向を優先してください".to_owned(),
+        expected_projection_revision: 5,
+    };
+
+    let resumed = session
+        .execute(command_context("CMD-ANSWER-1"), command.clone())
+        .unwrap();
+
+    assert_eq!(resumed.projection_revision, 6);
+    assert_eq!(
+        resumed.development_board[0].run_status.as_deref(),
+        Some("AGENT_RUNNING")
+    );
+    assert_eq!(resumed.inbox.len(), 1);
+    assert_eq!(resumed.inbox[0].status, "ANSWERED");
+    let retried = session
+        .execute(command_context("CMD-ANSWER-1"), command)
+        .unwrap();
+    assert_eq!(retried, resumed);
+    let journal = fs::read_to_string(project.path().join(".game-dev/events/events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 6);
+    assert!(journal.contains("INPUT_ANSWERED"));
+    assert!(journal.contains("左方向を優先してください"));
+
+    drop(session);
+    let restarted = start_project(project.path(), "restarted-coordinator").unwrap();
+    assert_eq!(restarted.snapshot(), &resumed);
+}
+
 struct FakeRunExecution {
     journal_path: PathBuf,
     outcome: Option<RunLaunchOutcome>,

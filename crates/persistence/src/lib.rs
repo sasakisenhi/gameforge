@@ -63,6 +63,7 @@ pub enum ProjectionError {
         payload_run_id: String,
         aggregate_id: String,
     },
+    InboxRequestNotFound(String),
     AggregateVersion {
         aggregate_type: String,
         aggregate_id: String,
@@ -94,6 +95,9 @@ impl fmt::Display for ProjectionError {
                 formatter,
                 "{event_type} payload run_id {payload_run_id} does not match TaskRun aggregate ID {aggregate_id}"
             ),
+            Self::InboxRequestNotFound(request_id) => {
+                write!(formatter, "Inbox request not found: {request_id}")
+            }
             Self::AggregateVersion {
                 aggregate_type,
                 aggregate_id,
@@ -295,6 +299,11 @@ fn apply_event_in_transaction(
             }
             if state == "INPUT_REQUIRED" {
                 insert_input_request(transaction, event, task_id, run_id)?;
+            } else if state == "AGENT_RUNNING"
+                && event.payload().get("resolution_kind").map(String::as_str)
+                    == Some("INPUT_ANSWERED")
+            {
+                resolve_input_request(transaction, event)?;
             }
         }
         _ => {}
@@ -343,6 +352,22 @@ fn insert_input_request(
             event.header().occurred_at,
         ],
     )?;
+    Ok(())
+}
+
+fn resolve_input_request(
+    transaction: &Transaction<'_>,
+    event: &EventEnvelope,
+) -> Result<(), ProjectionError> {
+    let request_id = payload(event, "resolved_request_id")?;
+    let updated = transaction.execute(
+        "UPDATE inbox_rows SET status = 'ANSWERED'
+         WHERE request_id = ?1 AND status = 'PENDING'",
+        [request_id],
+    )?;
+    if updated == 0 {
+        return Err(ProjectionError::InboxRequestNotFound(request_id.to_owned()));
+    }
     Ok(())
 }
 
