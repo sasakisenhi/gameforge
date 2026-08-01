@@ -1,10 +1,10 @@
 use gameforgo_domain::{
-    AcceptanceDecision, AcceptanceResultId, Actor, ArtifactHash, ArtifactUri, Build,
-    BuildId, Candidate, CandidateId, CandidateRevision, CommitSha, ContractRevision,
-    DomainError, EvidenceKey, EvidenceKind, HealthFlag, IncludedTaskRun, MergeGate,
-    PlaytestSession, PlaytestSessionId, RecordedAt, Task, TaskCommand, TaskDependency,
-    TaskDependencyKind, TaskId, TaskRun, TaskRunCommand, TaskRunId, TaskRunStatus,
-    decide_task, decide_task_run, evolve_task, evolve_task_run, validate_task_graph,
+    AcceptanceDecision, AcceptanceResultId, Actor, ArtifactHash, ArtifactUri, Build, BuildId,
+    Candidate, CandidateId, CandidateRevision, CommitSha, ContractRevision, DomainError,
+    EvidenceKey, EvidenceKind, HealthFlag, IncludedTaskRun, MergeGate, PlaytestSession,
+    PlaytestSessionId, RecordedAt, Task, TaskCommand, TaskDependency, TaskDependencyKind, TaskId,
+    TaskRun, TaskRunCommand, TaskRunId, TaskRunStatus, decide_task, decide_task_run, evolve_task,
+    evolve_task_run, validate_task_graph,
 };
 
 fn commit(value: char) -> CommitSha {
@@ -62,7 +62,10 @@ fn task_becomes_ready_only_through_a_valid_contract_revision() {
     let ready = events.iter().fold(task, evolve_task);
 
     assert!(ready.is_ready());
-    assert_eq!(ready.contract_revision(), Some(ContractRevision::new(1).unwrap()));
+    assert_eq!(
+        ready.contract_revision(),
+        Some(ContractRevision::new(1).unwrap())
+    );
     assert!(matches!(
         decide_task(&ready, TaskCommand::MarkAcceptedAfterMerge),
         Err(DomainError::InvalidTransition { .. })
@@ -77,7 +80,7 @@ fn dependency_graph_rejects_missing_self_and_cycles() {
 
     assert!(matches!(
         validate_task_graph(
-            &[one.clone()],
+            std::slice::from_ref(&one),
             &[TaskDependency::new(
                 one.clone(),
                 missing,
@@ -108,13 +111,8 @@ fn dependency_graph_rejects_missing_self_and_cycles() {
                     "先行",
                 )
                 .unwrap(),
-                TaskDependency::new(
-                    two,
-                    one,
-                    TaskDependencyKind::BlocksIntegration,
-                    "逆向き",
-                )
-                .unwrap(),
+                TaskDependency::new(two, one, TaskDependencyKind::BlocksIntegration, "逆向き",)
+                    .unwrap(),
             ],
         ),
         Err(DomainError::DependencyCycle(_))
@@ -143,8 +141,8 @@ fn dependency_order_is_stable_and_places_prerequisites_first() {
         .unwrap(),
     ];
 
-    let order = validate_task_graph(&[three.clone(), two.clone(), one.clone()], &dependencies)
-        .unwrap();
+    let order =
+        validate_task_graph(&[three.clone(), two.clone(), one.clone()], &dependencies).unwrap();
     assert_eq!(order, vec![one, two, three]);
 }
 
@@ -221,11 +219,7 @@ fn build_and_acceptance_are_bound_to_one_candidate_commit() {
         vec![included],
     )
     .unwrap();
-    let mut build = Build::request(
-        BuildId::new("BUILD-1").unwrap(),
-        &candidate,
-    )
-    .unwrap();
+    let mut build = Build::request(BuildId::new("BUILD-1").unwrap(), &candidate).unwrap();
     build.start().unwrap();
     assert!(matches!(
         build.complete(
@@ -243,11 +237,8 @@ fn build_and_acceptance_are_bound_to_one_candidate_commit() {
         )
         .unwrap();
 
-    let mut session = PlaytestSession::start(
-        PlaytestSessionId::new("PLAY-1").unwrap(),
-        &build,
-    )
-    .unwrap();
+    let mut session =
+        PlaytestSession::start(PlaytestSessionId::new("PLAY-1").unwrap(), &build).unwrap();
     session.begin().unwrap();
     let result = session
         .record_result(
@@ -306,11 +297,8 @@ fn merge_gate_rejects_any_commit_mismatch() {
             ArtifactHash::new("sha256:abcd").unwrap(),
         )
         .unwrap();
-    let mut session = PlaytestSession::start(
-        PlaytestSessionId::new("PLAY-1").unwrap(),
-        &build,
-    )
-    .unwrap();
+    let mut session =
+        PlaytestSession::start(PlaytestSessionId::new("PLAY-1").unwrap(), &build).unwrap();
     session.begin().unwrap();
     let result = session
         .record_result(
