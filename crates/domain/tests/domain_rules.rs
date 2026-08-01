@@ -3,8 +3,8 @@ use gameforge_domain::{
     Candidate, CandidateId, CandidateRevision, CommitSha, ContractRevision, DomainError,
     EvidenceKey, EvidenceKind, HealthFlag, IncludedTaskRun, MergeGate, PlaytestSession,
     PlaytestSessionId, RecordedAt, Task, TaskCommand, TaskDependency, TaskDependencyKind, TaskId,
-    TaskRun, TaskRunCommand, TaskRunId, TaskRunStatus, decide_task, decide_task_run, evolve_task,
-    evolve_task_run, validate_task_graph,
+    TaskRun, TaskRunCommand, TaskRunEvent, TaskRunId, TaskRunStatus, decide_task, decide_task_run,
+    evolve_task, evolve_task_run, validate_task_graph,
 };
 
 fn commit(value: char) -> CommitSha {
@@ -197,6 +197,26 @@ fn task_run_requires_leases_and_tdd_evidence() {
         ),
         Err(DomainError::MissingTddEvidence)
     ));
+}
+
+#[test]
+fn preparation_is_deferred_to_queue_without_marking_the_run_failed() {
+    let run = TaskRun::new(
+        TaskRunId::new("RUN-1").unwrap(),
+        TaskId::new("TASK-1").unwrap(),
+        ContractRevision::new(1).unwrap(),
+        commit('a'),
+    );
+    let prepared = decide_task_run(&run, TaskRunCommand::Prepare)
+        .unwrap()
+        .iter()
+        .fold(run, evolve_task_run);
+
+    let events = decide_task_run(&prepared, TaskRunCommand::DeferPreparation).unwrap();
+    let deferred = events.iter().fold(prepared, evolve_task_run);
+
+    assert_eq!(events, [TaskRunEvent::PreparationDeferred]);
+    assert_eq!(deferred.status(), TaskRunStatus::Queued);
 }
 
 #[test]

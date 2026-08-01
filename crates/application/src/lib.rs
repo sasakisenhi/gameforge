@@ -199,6 +199,109 @@ impl fmt::Display for ActionError {
 
 impl std::error::Error for ActionError {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunLaunchRequest {
+    pub task_run_id: String,
+    pub task_id: String,
+    pub contract_revision: u64,
+    pub base_commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedRun {
+    resource_lease: String,
+    worktree_lease: String,
+    agent_session: String,
+}
+
+impl StartedRun {
+    pub fn new(
+        resource_lease_id: impl Into<String>,
+        worktree_lease_id: impl Into<String>,
+        agent_session_id: impl Into<String>,
+    ) -> Result<Self, RunExecutionContractError> {
+        Ok(Self {
+            resource_lease: required_execution_value(
+                "resource_lease_id",
+                resource_lease_id.into(),
+            )?,
+            worktree_lease: required_execution_value(
+                "worktree_lease_id",
+                worktree_lease_id.into(),
+            )?,
+            agent_session: required_execution_value("agent_session_id", agent_session_id.into())?,
+        })
+    }
+
+    #[must_use]
+    pub fn resource_lease_id(&self) -> &str {
+        &self.resource_lease
+    }
+
+    #[must_use]
+    pub fn worktree_lease_id(&self) -> &str {
+        &self.worktree_lease
+    }
+
+    #[must_use]
+    pub fn agent_session_id(&self) -> &str {
+        &self.agent_session
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunLaunchDeferral {
+    ResourceUnavailable,
+    WorktreeUnavailable,
+}
+
+impl RunLaunchDeferral {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ResourceUnavailable => "RESOURCE_UNAVAILABLE",
+            Self::WorktreeUnavailable => "WORKTREE_UNAVAILABLE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunLaunchOutcome {
+    Started(StartedRun),
+    Deferred {
+        reason: RunLaunchDeferral,
+        detail: String,
+    },
+}
+
+pub trait RunExecutionPort {
+    fn start_run(&mut self, request: &RunLaunchRequest) -> RunLaunchOutcome;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunExecutionContractError {
+    field: &'static str,
+}
+
+impl fmt::Display for RunExecutionContractError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} must not be empty", self.field)
+    }
+}
+
+impl std::error::Error for RunExecutionContractError {}
+
+fn required_execution_value(
+    field: &'static str,
+    value: String,
+) -> Result<String, RunExecutionContractError> {
+    if value.trim().is_empty() {
+        Err(RunExecutionContractError { field })
+    } else {
+        Ok(value)
+    }
+}
+
 pub fn command_for_board_intent(
     view: &AppShellView,
     intent: BoardIntent,
