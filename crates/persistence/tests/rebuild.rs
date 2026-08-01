@@ -4,7 +4,7 @@ use gameforgo_event_journal::{AggregateRef, EventEnvelope, EventHeader};
 use gameforgo_persistence::{DevelopmentBoardRow, ProjectionStore};
 use gameforgo_project_documents::load_task_document;
 
-const TASK: &str = r#"---
+const TASK: &str = r"---
 schema_version: 1
 id: TASK-001
 title: 砂の落下規則
@@ -25,7 +25,7 @@ risk: low
 # 目的
 
 砂を落下させる。
-"#;
+";
 
 fn event(id: &str, version: u64, event_type: &str, state: Option<&str>) -> EventEnvelope {
     let mut payload = BTreeMap::from([

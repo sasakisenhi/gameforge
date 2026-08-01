@@ -2,7 +2,7 @@ use gameforgo_project_documents::{DocumentError, load_task_document, validate_ta
 
 fn task_document(id: &str, dependency: &str) -> String {
     format!(
-        r#"---
+        r"---
 schema_version: 1
 id: {id}
 title: 砂の落下規則
@@ -23,7 +23,7 @@ risk: low
 # 目的
 
 空きセルが下にある場合、砂を下方向へ移動させる。
-"#
+"
     )
 }
 
