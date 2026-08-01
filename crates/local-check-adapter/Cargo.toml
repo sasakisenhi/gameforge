@@ -1,0 +1,12 @@
+[package]
+name = "gameforge-local-check-adapter"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+gameforge-application = { path = "../application" }
+
+[lints]
+workspace = true

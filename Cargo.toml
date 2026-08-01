@@ -8,6 +8,7 @@ members = [
     "crates/domain",
     "crates/control-protocol",
     "crates/event-journal",
+    "crates/local-check-adapter",
     "crates/persistence",
     "crates/project-documents",
     "crates/runtime",

@@ -16,6 +16,7 @@ use gameforge_desktop::{
     App, CommandResult, CoordinatorWorker, CoordinatorWorkerContext, DesktopConfig,
     spawn_coordinator_worker,
 };
+use gameforge_local_check_adapter::{LocalCheckRunner, LocalVerificationConfig};
 use gameforge_runtime::ScheduleConfig;
 
 static INITIAL_VIEW: OnceLock<AppShellView> = OnceLock::new();
@@ -48,9 +49,12 @@ fn run() -> Result<(), BootstrapError> {
         config.max_concurrent_task_runs(),
     ))
     .map_err(|error| BootstrapError::RunExecution(error.to_string()))?;
-    let coordinator = ProjectCoordinator::new(
+    let verification = LocalCheckRunner::new(LocalVerificationConfig::for_project(&project_root))
+        .map_err(|error| BootstrapError::LocalVerification(error.to_string()))?;
+    let coordinator = ProjectCoordinator::with_verification(
         session,
         execution,
+        verification,
         ScheduleConfig {
             max_concurrent_task_runs: config.max_concurrent_task_runs(),
         },
