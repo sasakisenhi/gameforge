@@ -42,6 +42,15 @@ pub enum ProjectionError {
         event_type: String,
         field: &'static str,
     },
+    TaskNotFound {
+        event_type: String,
+        task_id: String,
+    },
+    TaskRunIdMismatch {
+        event_type: String,
+        payload_run_id: String,
+        aggregate_id: String,
+    },
     AggregateVersion {
         aggregate_type: String,
         aggregate_id: String,
@@ -61,6 +70,18 @@ impl fmt::Display for ProjectionError {
             Self::MissingPayloadField { event_type, field } => {
                 write!(formatter, "{event_type} is missing payload field {field}")
             }
+            Self::TaskNotFound {
+                event_type,
+                task_id,
+            } => write!(formatter, "{event_type} references missing Task {task_id}"),
+            Self::TaskRunIdMismatch {
+                event_type,
+                payload_run_id,
+                aggregate_id,
+            } => write!(
+                formatter,
+                "{event_type} payload run_id {payload_run_id} does not match TaskRun aggregate ID {aggregate_id}"
+            ),
             Self::AggregateVersion {
                 aggregate_type,
                 aggregate_id,
@@ -215,16 +236,30 @@ fn apply_event_in_transaction(
         "TaskRunQueued" | "TaskRunStateChanged" => {
             let task_id = payload(event, "task_id")?;
             let run_id = payload(event, "run_id")?;
+            let aggregate_id = header.aggregate.aggregate_id();
+            if run_id != aggregate_id {
+                return Err(ProjectionError::TaskRunIdMismatch {
+                    event_type: event.event_type().to_owned(),
+                    payload_run_id: run_id.to_owned(),
+                    aggregate_id: aggregate_id.to_owned(),
+                });
+            }
             let state = event
                 .payload()
                 .get("state")
                 .map_or("QUEUED", String::as_str);
-            transaction.execute(
+            let updated = transaction.execute(
                 "UPDATE development_board_rows
                  SET current_run_id = ?1, run_status = ?2
                  WHERE task_id = ?3",
                 params![run_id, state, task_id],
             )?;
+            if updated == 0 {
+                return Err(ProjectionError::TaskNotFound {
+                    event_type: event.event_type().to_owned(),
+                    task_id: task_id.to_owned(),
+                });
+            }
         }
         _ => {}
     }
