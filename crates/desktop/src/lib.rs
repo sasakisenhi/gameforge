@@ -2,8 +2,8 @@
 
 use dioxus::prelude::*;
 use gameforge_application::{
-    AppShellView, ApplicationCommand, BoardIntent, ConnectionState, InboxIntent, TaskRowView,
-    command_for_board_intent, command_for_inbox_intent,
+    AppShellView, ApplicationCommand, BoardIntent, ConnectionState, InboxIntent, InboxItemView,
+    TaskRowView, command_for_board_intent, command_for_inbox_intent,
 };
 
 const APP_CSS: &str = include_str!("app.css");
@@ -801,81 +801,14 @@ fn inbox_page(
     let mutations_available =
         matches!(view.connection, ConnectionState::Connected) && !view.is_stale;
     let items = view.inbox.items.iter().map(|item| {
-        let request_id = item.request_id.clone();
-        let command_view = view.clone();
-        let command_callback = on_command;
-        let notice_signal = command_notice;
-        let view_signal = app_view;
-        rsx! {
-            article { class: "inbox-item", key: "{item.request_id}",
-                header {
-                    div {
-                        span { class: "inbox-kind", "{item.request_kind}" }
-                        strong { "{item.request_id}" }
-                    }
-                    {status_pill(&item.status, "request")}
-                }
-                p { class: "inbox-prompt", "{item.prompt}" }
-                dl {
-                    div {
-                        dt { "TASK" }
-                        dd { "{item.task_id}" }
-                    }
-                    div {
-                        dt { "RUN" }
-                        dd { "{item.task_run_id}" }
-                    }
-                    div {
-                        dt { "REQUESTED" }
-                        dd { "{item.requested_at}" }
-                    }
-                }
-                if item.status == "PENDING" {
-                    form {
-                        class: "answer-form",
-                        onsubmit: move |event| {
-                            event.prevent_default();
-                            let answer = match event.get_first("answer") {
-                                Some(FormValue::Text(answer)) => answer,
-                                _ => String::new(),
-                            };
-                            let effect = execute_inbox_intent(
-                                &command_view,
-                                InboxIntent::AnswerInput {
-                                    request_id: request_id.clone(),
-                                    answer,
-                                },
-                                |command| command_callback.map_or(
-                                    CommandResult::Unavailable,
-                                    |callback| callback.call(command),
-                                ),
-                            );
-                            if let (Some(updated_view), Some(mut signal)) =
-                                (effect.updated_view, view_signal)
-                            {
-                                signal.set(updated_view);
-                            }
-                            if let Some(mut signal) = notice_signal {
-                                signal.set(Some(effect.notice));
-                            }
-                        },
-                        textarea {
-                            name: "answer",
-                            required: true,
-                            disabled: !mutations_available,
-                            placeholder: "Agentへ返す回答を入力してください",
-                        }
-                        button {
-                            r#type: "submit",
-                            disabled: !mutations_available,
-                            "Submit Answer"
-                        }
-                    }
-                } else {
-                    p { class: "answer-complete", "この要求には回答済みです。" }
-                }
-            }
-        }
+        inbox_item(
+            item,
+            view,
+            mutations_available,
+            command_notice,
+            app_view,
+            on_command,
+        )
     });
     rsx! {
         section { class: "page inbox-page",
@@ -897,6 +830,88 @@ fn inbox_page(
                     h3 { "対応待ちの入力要求はありません" }
                     p { "Agentから入力要求が届くと、ここにTaskとRunを表示します。" }
                 }
+            }
+        }
+    }
+}
+
+fn inbox_item(
+    item: &InboxItemView,
+    view: &AppShellView,
+    mutations_available: bool,
+    command_notice: Option<Signal<Option<String>>>,
+    app_view: Option<Signal<AppShellView>>,
+    on_command: Option<Callback<ApplicationCommand, CommandResult>>,
+) -> Element {
+    let request_id = item.request_id.clone();
+    let command_view = view.clone();
+    rsx! {
+        article { class: "inbox-item", key: "{item.request_id}",
+            header {
+                div {
+                    span { class: "inbox-kind", "{item.request_kind}" }
+                    strong { "{item.request_id}" }
+                }
+                {status_pill(&item.status, "request")}
+            }
+            p { class: "inbox-prompt", "{item.prompt}" }
+            dl {
+                div {
+                    dt { "TASK" }
+                    dd { "{item.task_id}" }
+                }
+                div {
+                    dt { "RUN" }
+                    dd { "{item.task_run_id}" }
+                }
+                div {
+                    dt { "REQUESTED" }
+                    dd { "{item.requested_at}" }
+                }
+            }
+            if item.status == "PENDING" {
+                form {
+                    class: "answer-form",
+                    onsubmit: move |event| {
+                        event.prevent_default();
+                        let answer = match event.get_first("answer") {
+                            Some(FormValue::Text(answer)) => answer,
+                            _ => String::new(),
+                        };
+                        let effect = execute_inbox_intent(
+                            &command_view,
+                            InboxIntent::AnswerInput {
+                                request_id: request_id.clone(),
+                                answer,
+                            },
+                            |command| on_command.map_or(
+                                CommandResult::Unavailable,
+                                |callback| callback.call(command),
+                            ),
+                        );
+                        if let (Some(updated_view), Some(mut signal)) =
+                            (effect.updated_view, app_view)
+                        {
+                            signal.set(updated_view);
+                        }
+                        if let Some(mut signal) = command_notice {
+                            signal.set(Some(effect.notice));
+                        }
+                    },
+                    textarea {
+                        name: "answer",
+                        required: true,
+                        disabled: !mutations_available,
+                        placeholder: "Agentへ返す回答を入力してください",
+                    }
+                    button {
+                        r#type: "submit",
+                        disabled: !mutations_available,
+                        "Submit Answer"
+                    }
+                }
+            } else {
+                p { class: "answer-complete", "この要求には回答済みです。" }
             }
         }
     }
