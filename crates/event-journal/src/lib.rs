@@ -120,10 +120,15 @@ pub enum JournalError {
         line: usize,
         reason: String,
     },
+    IncompleteTail {
+        line: usize,
+        incomplete_bytes: u64,
+    },
     InvalidField {
         field: &'static str,
         reason: String,
     },
+    NoIncompleteTail,
     UnsupportedSchemaVersion(u32),
     DuplicateEventId(String),
     AggregateVersion {
@@ -141,7 +146,15 @@ impl fmt::Display for JournalError {
             Self::InvalidRecord { line, reason } => {
                 write!(formatter, "invalid journal record at line {line}: {reason}")
             }
+            Self::IncompleteTail {
+                line,
+                incomplete_bytes,
+            } => write!(
+                formatter,
+                "incomplete journal tail at line {line}: {incomplete_bytes} bytes can be truncated"
+            ),
             Self::InvalidField { field, reason } => write!(formatter, "{field}: {reason}"),
+            Self::NoIncompleteTail => write!(formatter, "journal has no incomplete tail"),
             Self::UnsupportedSchemaVersion(version) => {
                 write!(formatter, "unsupported schema version: {version}")
             }
@@ -167,6 +180,34 @@ impl From<std::io::Error> for JournalError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 不完全な最終レコードを切り詰めた結果。
+pub struct TailRecovery {
+    truncated_bytes: u64,
+    retained_bytes: u64,
+    recovered_line: usize,
+}
+
+impl TailRecovery {
+    /// ファイル末尾から切り詰めたbyte数を返す。
+    #[must_use]
+    pub const fn truncated_bytes(self) -> u64 {
+        self.truncated_bytes
+    }
+
+    /// 復旧後のファイルサイズを返す。
+    #[must_use]
+    pub const fn retained_bytes(self) -> u64 {
+        self.retained_bytes
+    }
+
+    /// 切り詰めた不完全レコードの行番号を返す。
+    #[must_use]
+    pub const fn recovered_line(self) -> usize {
+        self.recovered_line
+    }
+}
+
 pub struct EventJournal {
     path: PathBuf,
     events: Vec<EventEnvelope>,
@@ -183,31 +224,96 @@ impl EventJournal {
             .create(true)
             .open(&path)
             .map_err(JournalError::from)?;
-        let mut content = String::new();
-        file.read_to_string(&mut content)
-            .map_err(JournalError::from)?;
+        let mut content = Vec::new();
+        file.read_to_end(&mut content).map_err(JournalError::from)?;
 
+        Self::from_bytes(path, &content)
+    }
+
+    /// 改行されずJSONの途中で終わった最終レコードだけを切り詰める。
+    pub fn recover_incomplete_tail(path: impl AsRef<Path>) -> Result<TailRecovery, JournalError> {
+        let path = path.as_ref().to_path_buf();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(JournalError::from)?;
+        let mut content = Vec::new();
+        file.read_to_end(&mut content).map_err(JournalError::from)?;
+
+        let (recovered_line, truncated_bytes) = match Self::from_bytes(path, &content) {
+            Err(JournalError::IncompleteTail {
+                line,
+                incomplete_bytes,
+            }) => (line, incomplete_bytes),
+            Err(error) => return Err(error),
+            Ok(_) => return Err(JournalError::NoIncompleteTail),
+        };
+        let original_bytes = byte_count(content.len())?;
+        let current_bytes = file.metadata().map_err(JournalError::from)?.len();
+        if current_bytes != original_bytes {
+            return Err(JournalError::Io(
+                "journal changed while recovery was in progress".to_owned(),
+            ));
+        }
+        let retained_bytes = original_bytes
+            .checked_sub(truncated_bytes)
+            .ok_or_else(|| JournalError::Io("incomplete tail exceeds journal size".to_owned()))?;
+        file.set_len(retained_bytes).map_err(JournalError::from)?;
+        file.sync_data().map_err(JournalError::from)?;
+
+        Ok(TailRecovery {
+            truncated_bytes,
+            retained_bytes,
+            recovered_line,
+        })
+    }
+
+    fn from_bytes(path: PathBuf, content: &[u8]) -> Result<Self, JournalError> {
         let mut journal = Self {
             path,
             events: Vec::new(),
             event_ids: BTreeSet::new(),
             aggregate_versions: BTreeMap::new(),
         };
-        for (index, line) in content.lines().enumerate() {
-            if line.trim().is_empty() {
+        let mut line_start = 0;
+        let mut line_number = 1;
+        while line_start < content.len() {
+            let newline = content[line_start..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map(|offset| line_start + offset);
+            let line_end = newline.unwrap_or(content.len());
+            let line = &content[line_start..line_end];
+            let terminated = newline.is_some();
+
+            if line_is_empty(line) {
                 return Err(JournalError::InvalidRecord {
-                    line: index + 1,
+                    line: line_number,
                     reason: "empty records are not allowed".to_owned(),
                 });
             }
-            let event: EventEnvelope =
-                serde_json::from_str(line).map_err(|error| JournalError::InvalidRecord {
-                    line: index + 1,
-                    reason: error.to_string(),
-                })?;
+            let event: EventEnvelope = match serde_json::from_slice(line) {
+                Ok(event) => event,
+                Err(error) if !terminated && incomplete_record(line, &error) => {
+                    return Err(JournalError::IncompleteTail {
+                        line: line_number,
+                        incomplete_bytes: byte_count(line.len())?,
+                    });
+                }
+                Err(error) => {
+                    return Err(JournalError::InvalidRecord {
+                        line: line_number,
+                        reason: error.to_string(),
+                    });
+                }
+            };
             validate_envelope(&event)?;
             journal.validate_sequence(&event)?;
             journal.record(event);
+
+            line_start = newline.map_or(content.len(), |offset| offset + 1);
+            line_number += 1;
         }
         Ok(journal)
     }
@@ -269,6 +375,29 @@ impl EventJournal {
         );
         self.events.push(event);
     }
+}
+
+fn byte_count(length: usize) -> Result<u64, JournalError> {
+    u64::try_from(length)
+        .map_err(|_| JournalError::Io("journal is too large to address by byte offset".to_owned()))
+}
+
+fn line_is_empty(line: &[u8]) -> bool {
+    std::str::from_utf8(line).is_ok_and(|line| line.trim().is_empty())
+}
+
+fn incomplete_record(line: &[u8], error: &serde_json::Error) -> bool {
+    if error.is_eof() {
+        return true;
+    }
+    let Err(utf8_error) = std::str::from_utf8(line) else {
+        return false;
+    };
+    if utf8_error.error_len().is_some() {
+        return false;
+    }
+    serde_json::from_slice::<EventEnvelope>(&line[..utf8_error.valid_up_to()])
+        .is_err_and(|prefix_error| prefix_error.is_eof())
 }
 
 fn validate_envelope(event: &EventEnvelope) -> Result<(), JournalError> {
