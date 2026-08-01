@@ -16,6 +16,7 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 - Dioxus NativeのApplication Shell、Development Board、切断時の読み取り専用表示
 - GUI起動中にWriter Leaseを保持するProject Session
 - Queue commandのEvent Journal永続化、冪等な再送、Projection競合検出
+- Run取消しのEvent Journal永続化、再送冪等性、取消後の再Queue
 - 決定的な優先順と実行上限1を守るScheduler Policy
 - 外部起動前のOperation記録と、lease取得結果を扱うRun Supervisor境界
 
@@ -28,6 +29,8 @@ cargo run -p gameforge-desktop -- examples/powder-game
 ```
 
 画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Project Sessionが`TaskRunQueued`をEvent Journalへ記録します。続けてSchedulerがQueueを評価し、容量が空いていれば最初のTask Runを`PREPARING`へ進めてRead Modelと画面を更新します。同じcommand IDの再送は重複記録せず、古いProjection revisionからの操作は変更前に拒否します。
+
+進行中RunにはCancel Run操作を表示します。取消しは`TaskRunStateChanged`の`CANCELLED`として永続化され、同じcommand IDの再送では重複しません。取消し後は現在Run IDを解放するため、同じTaskを新しいattemptとしてQueueできます。
 
 現在の実行容量は1です。実行中のRunがある場合、後続Runは`QUEUED`に留まります。Run Supervisorは外部Adapterを呼ぶ前に`TaskRunStartRequested`を記録し、資源lease・worktree lease・agent sessionが揃った場合だけ`AGENT_RUNNING`へ進めます。資源を確保できない場合はRunを失敗扱いせず`QUEUED`へ戻し、後から再スケジュールできます。
 
