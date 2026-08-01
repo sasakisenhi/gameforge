@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use gameforgo_runtime::{CoordinatorError, ProjectWriterLease};
+use gameforge_runtime::{CoordinatorError, ProjectWriterLease};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -16,7 +16,7 @@ impl TempProject {
     fn create() -> Self {
         let unique = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("gameforgo-runtime-{}-{unique}", std::process::id()));
+            std::env::temp_dir().join(format!("gameforge-runtime-{}-{unique}", std::process::id()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -58,7 +58,7 @@ fn a_separate_process_cannot_take_a_live_writer_lease() {
             "holds_writer_lease_for_parent_test",
             "--nocapture",
         ])
-        .env("GAMEFORGO_TEST_PROJECT", project.path())
+        .env("GAMEFORGE_TEST_PROJECT", project.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -85,7 +85,7 @@ fn a_separate_process_cannot_take_a_live_writer_lease() {
 #[test]
 #[ignore = "helper invoked by a parent process"]
 fn holds_writer_lease_for_parent_test() {
-    let Ok(project) = std::env::var("GAMEFORGO_TEST_PROJECT") else {
+    let Ok(project) = std::env::var("GAMEFORGE_TEST_PROJECT") else {
         return;
     };
     let _lease = ProjectWriterLease::acquire(project, "child", 1).unwrap();

@@ -2084,46 +2084,46 @@ dependencies = [
 ]
 
 [[package]]
-name = "gameforgo-application"
+name = "gameforge-application"
 version = "0.1.0"
 
 [[package]]
-name = "gameforgo-bootstrap"
+name = "gameforge-bootstrap"
 version = "0.1.0"
 dependencies = [
- "gameforgo-event-journal",
- "gameforgo-persistence",
- "gameforgo-project-documents",
- "gameforgo-runtime",
+ "gameforge-event-journal",
+ "gameforge-persistence",
+ "gameforge-project-documents",
+ "gameforge-runtime",
 ]
 
 [[package]]
-name = "gameforgo-cli"
+name = "gameforge-cli"
 version = "0.1.0"
 dependencies = [
- "gameforgo-bootstrap",
+ "gameforge-bootstrap",
 ]
 
 [[package]]
-name = "gameforgo-control-protocol"
+name = "gameforge-control-protocol"
 version = "0.1.0"
 
 [[package]]
-name = "gameforgo-desktop"
+name = "gameforge-desktop"
 version = "0.1.0"
 dependencies = [
  "dioxus",
  "dioxus-ssr",
- "gameforgo-application",
- "gameforgo-bootstrap",
+ "gameforge-application",
+ "gameforge-bootstrap",
 ]
 
 [[package]]
-name = "gameforgo-domain"
+name = "gameforge-domain"
 version = "0.1.0"
 
 [[package]]
-name = "gameforgo-event-journal"
+name = "gameforge-event-journal"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -2131,30 +2131,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "gameforgo-persistence"
+name = "gameforge-persistence"
 version = "0.1.0"
 dependencies = [
- "gameforgo-application",
- "gameforgo-event-journal",
- "gameforgo-project-documents",
+ "gameforge-application",
+ "gameforge-event-journal",
+ "gameforge-project-documents",
  "rusqlite",
 ]
 
 [[package]]
-name = "gameforgo-project-documents"
+name = "gameforge-project-documents"
 version = "0.1.0"
 dependencies = [
- "gameforgo-domain",
+ "gameforge-domain",
  "serde",
  "serde-saphyr",
  "sha2",
 ]
 
 [[package]]
-name = "gameforgo-runtime"
+name = "gameforge-runtime"
 version = "0.1.0"
 dependencies = [
- "gameforgo-control-protocol",
+ "gameforge-control-protocol",
 ]
 
 [[package]]

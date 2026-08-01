@@ -1,5 +1,5 @@
 [package]
-name = "gameforgo-event-journal"
+name = "gameforge-event-journal"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true

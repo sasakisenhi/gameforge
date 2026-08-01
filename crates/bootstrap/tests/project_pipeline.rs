@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use gameforgo_bootstrap::{rebuild_project, start_project, validate_project};
+use gameforge_bootstrap::{rebuild_project, start_project, validate_project};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -14,7 +14,7 @@ impl TempProject {
     fn create() -> Self {
         let unique = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "gameforgo-bootstrap-{}-{unique}",
+            "gameforge-bootstrap-{}-{unique}",
             std::process::id()
         ));
         let tasks = root.join(".game-dev/tasks");

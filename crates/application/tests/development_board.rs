@@ -1,4 +1,4 @@
-use gameforgo_application::{
+use gameforge_application::{
     ActionError, AppShellContext, ApplicationCommand, BoardIntent, ConnectionState,
     DevelopmentBoardRecord, command_for_board_intent, compose_app_shell,
 };

@@ -1,7 +1,7 @@
 //! Dioxus desktop client and pure UI state transitions.
 
 use dioxus::prelude::*;
-use gameforgo_application::{
+use gameforge_application::{
     AppShellView, ApplicationCommand, BoardIntent, ConnectionState, TaskRowView,
     command_for_board_intent,
 };

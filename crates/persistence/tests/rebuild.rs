@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use gameforgo_event_journal::{AggregateRef, EventEnvelope, EventHeader};
-use gameforgo_persistence::{DevelopmentBoardRow, ProjectionStore};
-use gameforgo_project_documents::load_task_document;
+use gameforge_event_journal::{AggregateRef, EventEnvelope, EventHeader};
+use gameforge_persistence::{DevelopmentBoardRow, ProjectionStore};
+use gameforge_project_documents::load_task_document;
 
 const TASK: &str = r"---
 schema_version: 1

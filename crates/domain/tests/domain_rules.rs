@@ -1,4 +1,4 @@
-use gameforgo_domain::{
+use gameforge_domain::{
     AcceptanceDecision, AcceptanceResultId, Actor, ArtifactHash, ArtifactUri, Build, BuildId,
     Candidate, CandidateId, CandidateRevision, CommitSha, ContractRevision, DomainError,
     EvidenceKey, EvidenceKind, HealthFlag, IncludedTaskRun, MergeGate, PlaytestSession,

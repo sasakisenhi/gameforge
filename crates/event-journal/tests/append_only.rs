@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use gameforgo_event_journal::{
+use gameforge_event_journal::{
     AggregateRef, EventEnvelope, EventHeader, EventJournal, JournalError,
 };
 
@@ -14,7 +14,7 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 fn temp_journal() -> PathBuf {
     let unique = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "gameforgo-journal-{}-{unique}.jsonl",
+        "gameforge-journal-{}-{unique}.jsonl",
         std::process::id()
     ))
 }

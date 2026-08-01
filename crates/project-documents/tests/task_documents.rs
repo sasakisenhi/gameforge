@@ -1,4 +1,4 @@
-use gameforgo_project_documents::{DocumentError, load_task_document, validate_task_documents};
+use gameforge_project_documents::{DocumentError, load_task_document, validate_task_documents};
 
 fn task_document(id: &str, dependency: &str) -> String {
     format!(

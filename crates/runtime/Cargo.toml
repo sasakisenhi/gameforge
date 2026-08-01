@@ -1,12 +1,12 @@
 [package]
-name = "gameforgo-runtime"
+name = "gameforge-runtime"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-gameforgo-control-protocol = { path = "../control-protocol" }
+gameforge-control-protocol = { path = "../control-protocol" }
 
 [lints]
 workspace = true

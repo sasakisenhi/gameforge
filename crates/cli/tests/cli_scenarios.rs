@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use gameforgo_cli::{CliError, run};
+use gameforge_cli::{CliError, run};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -14,7 +14,7 @@ impl TempProject {
     fn create() -> Self {
         let unique = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let root =
-            std::env::temp_dir().join(format!("gameforgo-cli-{}-{unique}", std::process::id()));
+            std::env::temp_dir().join(format!("gameforge-cli-{}-{unique}", std::process::id()));
         let tasks = root.join(".game-dev/tasks");
         fs::create_dir_all(&tasks).unwrap();
         fs::write(tasks.join("TASK-001.md"), TASK).unwrap();

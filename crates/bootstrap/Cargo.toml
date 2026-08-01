@@ -1,15 +1,15 @@
 [package]
-name = "gameforgo-bootstrap"
+name = "gameforge-bootstrap"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-gameforgo-event-journal = { path = "../event-journal" }
-gameforgo-persistence = { path = "../persistence" }
-gameforgo-project-documents = { path = "../project-documents" }
-gameforgo-runtime = { path = "../runtime" }
+gameforge-event-journal = { path = "../event-journal" }
+gameforge-persistence = { path = "../persistence" }
+gameforge-project-documents = { path = "../project-documents" }
+gameforge-runtime = { path = "../runtime" }
 
 [lints]
 workspace = true

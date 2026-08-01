@@ -1,4 +1,4 @@
-# gameforgo
+# gameforge
 
 AI並列ゲーム開発コントロールプレーンの実装です。設計資料のMilestone 0と、Dioxus Nativeによる最初のデスクトップ縦切りを実装しています。
 
@@ -21,7 +21,7 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 サンプルプロジェクトのRead Modelを再構築し、Development Boardをネイティブウィンドウで開きます。
 
 ```console
-cargo run -p gameforgo-desktop -- examples/powder-game
+cargo run -p gameforge-desktop -- examples/powder-game
 ```
 
 画面内のナビゲーション、Taskフィルター、行選択はローカルUI状態として扱います。QueueボタンはApplication層の`ApplicationCommand`へ変換され、Coordinatorへ送信する処理は次の縦切りで接続します。
@@ -31,13 +31,13 @@ cargo run -p gameforgo-desktop -- examples/powder-game
 サンプルプロジェクトのTask文書を検証します。
 
 ```console
-cargo run -p gameforgo-cli -- validate examples/powder-game
+cargo run -p gameforge-cli -- validate examples/powder-game
 ```
 
 Event JournalからSQLite Read Modelを再構築し、Development Boardを表示します。
 
 ```console
-cargo run -p gameforgo-cli -- rebuild examples/powder-game
+cargo run -p gameforge-cli -- rebuild examples/powder-game
 ```
 
 `rebuild`は次のローカル生成物を作ります。SQLiteとruntime lock metadataはGit管理しません。

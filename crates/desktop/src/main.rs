@@ -1,15 +1,15 @@
 use std::{path::PathBuf, sync::OnceLock};
 
 use dioxus::prelude::*;
-use gameforgo_application::{AppShellContext, AppShellView, ConnectionState, compose_app_shell};
-use gameforgo_bootstrap::{BootstrapError, start_project};
-use gameforgo_desktop::App;
+use gameforge_application::{AppShellContext, AppShellView, ConnectionState, compose_app_shell};
+use gameforge_bootstrap::{BootstrapError, start_project};
+use gameforge_desktop::App;
 
 static INITIAL_VIEW: OnceLock<AppShellView> = OnceLock::new();
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("gameforgo-desktop: {error}");
+        eprintln!("gameforge-desktop: {error}");
         std::process::exit(1);
     }
 }
@@ -21,13 +21,13 @@ fn run() -> Result<(), BootstrapError> {
     let project_name = project_root
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("GameForGo Project")
+        .unwrap_or("GameForge Project")
         .to_owned();
     let coordinator_id = format!("desktop-{}", std::process::id());
     let session = start_project(&project_root, &coordinator_id)?;
     let snapshot = session.snapshot().clone();
     let main_commit =
-        std::env::var("GAMEFORGO_MAIN_COMMIT").unwrap_or_else(|_| "未確認".to_owned());
+        std::env::var("GAMEFORGE_MAIN_COMMIT").unwrap_or_else(|_| "未確認".to_owned());
     let view = compose_app_shell(
         AppShellContext {
             project_name,

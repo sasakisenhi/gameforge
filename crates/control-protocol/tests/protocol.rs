@@ -1,4 +1,4 @@
-use gameforgo_control_protocol::{
+use gameforge_control_protocol::{
     ClientHello, CommandEnvelope, ProtocolError, ProtocolVersion, negotiate,
 };
 

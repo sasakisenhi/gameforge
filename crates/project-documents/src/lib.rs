@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeSet, fmt};
 
-use gameforgo_domain::{
+use gameforge_domain::{
     ContractRevision, DomainError, TaskDependency, TaskDependencyKind, TaskId, validate_task_graph,
 };
 use serde::Deserialize;

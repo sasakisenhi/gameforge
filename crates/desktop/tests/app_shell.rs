@@ -1,12 +1,12 @@
-use gameforgo_application::{
+use gameforge_application::{
     AppShellContext, ConnectionState, DevelopmentBoardRecord, compose_app_shell,
 };
-use gameforgo_desktop::{Route, TaskFilter, UiAction, UiState, reduce_ui_state, render_app};
+use gameforge_desktop::{Route, TaskFilter, UiAction, UiState, reduce_ui_state, render_app};
 
 fn view(
     connection: ConnectionState,
     rows: Vec<DevelopmentBoardRecord>,
-) -> gameforgo_application::AppShellView {
+) -> gameforge_application::AppShellView {
     compose_app_shell(
         AppShellContext {
             project_name: "Powder Game".to_owned(),

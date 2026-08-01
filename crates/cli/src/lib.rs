@@ -3,9 +3,9 @@
 
 use std::{fmt, io::Write, path::Path};
 
-use gameforgo_bootstrap::{rebuild_project, validate_project};
+use gameforge_bootstrap::{rebuild_project, validate_project};
 
-const USAGE: &str = "使い方: gameforgo <validate|rebuild> PROJECT_ROOT";
+const USAGE: &str = "使い方: gameforge <validate|rebuild> PROJECT_ROOT";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliError {

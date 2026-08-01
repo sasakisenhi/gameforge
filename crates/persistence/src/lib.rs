@@ -3,9 +3,9 @@
 
 use std::fmt;
 
-pub use gameforgo_application::DevelopmentBoardRecord as DevelopmentBoardRow;
-use gameforgo_event_journal::EventEnvelope;
-use gameforgo_project_documents::TaskDocument;
+pub use gameforge_application::DevelopmentBoardRecord as DevelopmentBoardRow;
+use gameforge_event_journal::EventEnvelope;
+use gameforge_project_documents::TaskDocument;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 const SCHEMA: &str = r"
