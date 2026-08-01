@@ -18,6 +18,7 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 - Queue commandのEvent Journal永続化、冪等な再送、Projection競合検出
 - Run取消しのEvent Journal永続化、再送冪等性、取消後の再Queue
 - Agent入力要求のEvent Journal永続化とInbox Read Model
+- Inbox回答のEvent Journal永続化とAgent Run再開
 - 決定的な優先順と実行上限1を守るScheduler Policy
 - 外部起動前のOperation記録と、lease取得結果を扱うRun Supervisor境界
 
@@ -34,6 +35,8 @@ cargo run -p gameforge-desktop -- examples/powder-game
 進行中RunにはCancel Run操作を表示します。取消しは`TaskRunStateChanged`の`CANCELLED`として永続化され、同じcommand IDの再送では重複しません。取消し後は現在Run IDを解放するため、同じTaskを新しいattemptとしてQueueできます。
 
 Agentから入力が必要になったRunは`INPUT_REQUIRED`へ遷移し、要求ID、質問文、Task、Run、受付時刻をInboxへ表示します。InboxはSQLiteだけに依存せずEvent Journalから再構築でき、同じ入力要求commandの再送でも項目を重複させません。
+
+`PENDING`の入力要求にはInboxから回答できます。空回答、切断中、古いProjection、解決済み要求は送信前に拒否します。回答はEvent Journalへ記録され、Inbox itemを`ANSWERED`へ更新すると同時にRunを`AGENT_RUNNING`へ戻します。
 
 現在の実行容量は1です。実行中のRunがある場合、後続Runは`QUEUED`に留まります。Run Supervisorは外部Adapterを呼ぶ前に`TaskRunStartRequested`を記録し、資源lease・worktree lease・agent sessionが揃った場合だけ`AGENT_RUNNING`へ進めます。資源を確保できない場合はRunを失敗扱いせず`QUEUED`へ戻し、後から再スケジュールできます。
 
