@@ -141,13 +141,13 @@ pub fn compose_app_shell(
             let can_cancel = mutations_available && run_is_cancellable;
             let cancel_unavailable_reason =
                 (!can_cancel && record.current_run_id.is_some()).then(|| {
-                    if !mutations_available {
-                        "Coordinatorへ接続し、最新Projectionを取得してください".to_owned()
-                    } else {
+                    if mutations_available {
                         format!(
                             "Run状態 {} では取消しできません",
                             run_status.unwrap_or("未確認")
                         )
+                    } else {
+                        "Coordinatorへ接続し、最新Projectionを取得してください".to_owned()
                     }
                 });
 
