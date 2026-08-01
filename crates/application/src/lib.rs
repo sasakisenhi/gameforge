@@ -253,6 +253,11 @@ pub enum BoardIntent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboxIntent {
+    AnswerInput { request_id: String, answer: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplicationCommand {
     QueueTaskRun {
         task_id: String,
@@ -275,6 +280,7 @@ pub enum ActionError {
     StaleProjection,
     TaskNotFound(String),
     RunNotFound(String),
+    InputRequestNotFound(String),
     ActionUnavailable { reason: String },
 }
 
@@ -285,6 +291,9 @@ impl fmt::Display for ActionError {
             Self::StaleProjection => formatter.write_str("Projection is stale"),
             Self::TaskNotFound(task_id) => write!(formatter, "Task not found: {task_id}"),
             Self::RunNotFound(run_id) => write!(formatter, "Task Run not found: {run_id}"),
+            Self::InputRequestNotFound(request_id) => {
+                write!(formatter, "Input request not found: {request_id}")
+            }
             Self::ActionUnavailable { reason } => {
                 write!(formatter, "action is unavailable: {reason}")
             }
@@ -293,6 +302,47 @@ impl fmt::Display for ActionError {
 }
 
 impl std::error::Error for ActionError {}
+
+pub fn command_for_inbox_intent(
+    view: &AppShellView,
+    intent: InboxIntent,
+) -> Result<ApplicationCommand, ActionError> {
+    if !matches!(view.connection, ConnectionState::Connected) {
+        return Err(ActionError::CoordinatorDisconnected);
+    }
+    if view.is_stale {
+        return Err(ActionError::StaleProjection);
+    }
+
+    match intent {
+        InboxIntent::AnswerInput { request_id, answer } => {
+            let item = view
+                .inbox
+                .items
+                .iter()
+                .find(|item| item.request_id == request_id)
+                .ok_or_else(|| ActionError::InputRequestNotFound(request_id.clone()))?;
+            if item.status != "PENDING" {
+                return Err(ActionError::ActionUnavailable {
+                    reason: format!(
+                        "入力要求 {} は回答待ちではありません: {}",
+                        item.request_id, item.status
+                    ),
+                });
+            }
+            if answer.trim().is_empty() {
+                return Err(ActionError::ActionUnavailable {
+                    reason: "回答を入力してください".to_owned(),
+                });
+            }
+            Ok(ApplicationCommand::AnswerInputRequest {
+                request_id,
+                answer,
+                expected_projection_revision: view.projection_revision,
+            })
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunLaunchRequest {

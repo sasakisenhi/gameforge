@@ -4,7 +4,7 @@ use gameforge_application::{
 };
 use gameforge_desktop::{
     ColorTheme, CommandResult, Route, TaskFilter, UiAction, UiState, execute_board_intent,
-    reduce_ui_state, render_app, render_inbox,
+    execute_inbox_intent, reduce_ui_state, render_app, render_inbox,
 };
 
 fn view(
@@ -244,4 +244,100 @@ fn renders_pending_input_requests_in_the_inbox() {
     assert!(html.contains("RUN-TASK-001-1"));
     assert!(html.contains("砂の優先方向を選んでください"));
     assert!(html.contains("PENDING"));
+    assert!(html.contains("Submit Answer"));
+    assert!(html.contains("textarea"));
+}
+
+#[test]
+fn answer_action_reports_the_resumed_run_and_updates_the_inbox() {
+    let current = compose_app_shell_with_inbox(
+        AppShellContext {
+            project_name: "Powder Game".to_owned(),
+            project_root: "/work/powder".to_owned(),
+            main_commit: "91ad40c1".to_owned(),
+            connection: ConnectionState::Connected,
+            projection_revision: 5,
+            last_synced_at: "2026-08-01T12:00:00+09:00".to_owned(),
+            is_stale: false,
+            inbox_count: 0,
+            max_concurrent_task_runs: 1,
+        },
+        vec![DevelopmentBoardRecord {
+            task_id: "TASK-001".to_owned(),
+            title: "砂の落下規則".to_owned(),
+            task_status: "READY".to_owned(),
+            current_run_id: Some("RUN-TASK-001-1".to_owned()),
+            run_status: Some("INPUT_REQUIRED".to_owned()),
+            health_flags: Vec::new(),
+        }],
+        vec![InboxItemRecord {
+            request_id: "INPUT-001".to_owned(),
+            task_id: "TASK-001".to_owned(),
+            task_run_id: "RUN-TASK-001-1".to_owned(),
+            request_kind: "INPUT".to_owned(),
+            prompt: "砂の優先方向を選んでください".to_owned(),
+            status: "PENDING".to_owned(),
+            requested_at: "2026-08-01T12:00:00+09:00".to_owned(),
+        }],
+    );
+    let answered_records = current
+        .inbox
+        .items
+        .iter()
+        .map(|item| InboxItemRecord {
+            request_id: item.request_id.clone(),
+            task_id: item.task_id.clone(),
+            task_run_id: item.task_run_id.clone(),
+            request_kind: item.request_kind.clone(),
+            prompt: item.prompt.clone(),
+            status: "ANSWERED".to_owned(),
+            requested_at: item.requested_at.clone(),
+        })
+        .collect::<Vec<_>>();
+    let answered = compose_app_shell_with_inbox(
+        AppShellContext {
+            project_name: "Powder Game".to_owned(),
+            project_root: "/work/powder".to_owned(),
+            main_commit: "91ad40c1".to_owned(),
+            connection: ConnectionState::Connected,
+            projection_revision: 6,
+            last_synced_at: "2026-08-01T12:01:00+09:00".to_owned(),
+            is_stale: false,
+            inbox_count: 1,
+            max_concurrent_task_runs: 1,
+        },
+        vec![DevelopmentBoardRecord {
+            task_id: "TASK-001".to_owned(),
+            title: "砂の落下規則".to_owned(),
+            task_status: "READY".to_owned(),
+            current_run_id: Some("RUN-TASK-001-1".to_owned()),
+            run_status: Some("AGENT_RUNNING".to_owned()),
+            health_flags: Vec::new(),
+        }],
+        answered_records,
+    );
+
+    let effect = execute_inbox_intent(
+        &current,
+        gameforge_application::InboxIntent::AnswerInput {
+            request_id: "INPUT-001".to_owned(),
+            answer: "左方向を優先してください".to_owned(),
+        },
+        |command| {
+            assert_eq!(
+                command,
+                gameforge_application::ApplicationCommand::AnswerInputRequest {
+                    request_id: "INPUT-001".to_owned(),
+                    answer: "左方向を優先してください".to_owned(),
+                    expected_projection_revision: 5,
+                }
+            );
+            CommandResult::Applied(Box::new(answered.clone()))
+        },
+    );
+
+    assert_eq!(effect.updated_view, Some(answered));
+    assert!(effect.notice.contains("入力回答完了"));
+    assert!(effect.notice.contains("INPUT-001"));
+    assert!(effect.notice.contains("AGENT_RUNNING"));
 }

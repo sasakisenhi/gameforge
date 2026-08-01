@@ -1,7 +1,7 @@
 use gameforge_application::{
     ActionError, AppShellContext, ApplicationCommand, BoardIntent, ConnectionState,
-    DevelopmentBoardRecord, InboxItemRecord, StartedRun, command_for_board_intent,
-    compose_app_shell, compose_app_shell_with_inbox,
+    DevelopmentBoardRecord, InboxIntent, InboxItemRecord, StartedRun, command_for_board_intent,
+    command_for_inbox_intent, compose_app_shell, compose_app_shell_with_inbox,
 };
 
 fn context(connection: ConnectionState) -> AppShellContext {
@@ -199,4 +199,30 @@ fn composes_pending_input_requests_for_the_inbox() {
     assert_eq!(view.inbox.items.len(), 1);
     assert_eq!(view.inbox.items[0].request_id, "INPUT-001");
     assert_eq!(view.inbox.items[0].prompt, "優先方向を選んでください");
+
+    assert_eq!(
+        command_for_inbox_intent(
+            &view,
+            InboxIntent::AnswerInput {
+                request_id: "INPUT-001".to_owned(),
+                answer: "左方向を優先する".to_owned(),
+            },
+        )
+        .unwrap(),
+        ApplicationCommand::AnswerInputRequest {
+            request_id: "INPUT-001".to_owned(),
+            answer: "左方向を優先する".to_owned(),
+            expected_projection_revision: 42,
+        }
+    );
+    assert!(matches!(
+        command_for_inbox_intent(
+            &view,
+            InboxIntent::AnswerInput {
+                request_id: "INPUT-001".to_owned(),
+                answer: " ".to_owned(),
+            },
+        ),
+        Err(ActionError::ActionUnavailable { .. })
+    ));
 }

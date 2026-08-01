@@ -343,6 +343,11 @@ tr:hover .task-link span, tr.selected .task-link span, .task-link:focus-visible 
 .inbox-item dt { color: #777d79; font: 800 10px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .06em; }
 .inbox-item dd { overflow-wrap: anywhere; margin: 5px 0 0; color: #333834; font: 650 12px ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .inbox-empty { margin-top: 0; }
+.answer-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #cdd1cd; }
+.answer-form textarea { min-height: 74px; resize: vertical; padding: 10px 12px; color: #202421; background: #fff; border: 1px solid #aeb4af; font: 13px/1.5 system-ui, sans-serif; }
+.answer-form button { align-self: stretch; min-width: 132px; padding: 10px 14px; color: #fff; background: #3d4c44; border: 1px solid #253029; font: 800 12px ui-monospace, "SFMono-Regular", Consolas, monospace; cursor: pointer; }
+.answer-form button:disabled, .answer-form textarea:disabled { opacity: .55; cursor: not-allowed; }
+.answer-complete { margin: 15px 0 0; padding-top: 13px; color: #587060; border-top: 1px solid #d4d8d4; font-size: 12px; font-weight: 700; }
 .empty-state { min-height: 270px; display: grid; place-content: center; justify-items: center; padding: 35px; color: #6e7470; text-align: center; }
 .empty-glyph { color: #535855; font-size: 37px; }
 .empty-state h3 { margin: 11px 0 5px; color: #303432; font-size: 16px; }
