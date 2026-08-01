@@ -188,6 +188,7 @@ dependencies = [
 name = "gameforgo-persistence"
 version = "0.1.0"
 dependencies = [
+ "gameforgo-application",
  "gameforgo-event-journal",
  "gameforgo-project-documents",
  "rusqlite",

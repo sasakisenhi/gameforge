@@ -20,6 +20,18 @@ pub struct ProjectSnapshot {
     pub development_board: Vec<DevelopmentBoardRow>,
 }
 
+pub struct ProjectSession {
+    snapshot: ProjectSnapshot,
+    _writer_lease: ProjectWriterLease,
+}
+
+impl ProjectSession {
+    #[must_use]
+    pub const fn snapshot(&self) -> &ProjectSnapshot {
+        &self.snapshot
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootstrapError {
     Io(String),
@@ -70,8 +82,16 @@ pub fn rebuild_project(
     project_root: impl AsRef<Path>,
     coordinator_instance_id: &str,
 ) -> Result<ProjectSnapshot, BootstrapError> {
+    let session = start_project(project_root, coordinator_instance_id)?;
+    Ok(session.snapshot().clone())
+}
+
+pub fn start_project(
+    project_root: impl AsRef<Path>,
+    coordinator_instance_id: &str,
+) -> Result<ProjectSession, BootstrapError> {
     let project_root = project_root.as_ref();
-    let _writer_lease = ProjectWriterLease::acquire(project_root, coordinator_instance_id, 1)
+    let writer_lease = ProjectWriterLease::acquire(project_root, coordinator_instance_id, 1)
         .map_err(|error| BootstrapError::Coordinator(error.to_string()))?;
     let documents = load_task_documents(project_root)?;
     validate_task_documents(&documents)
@@ -88,13 +108,18 @@ pub fn rebuild_project(
         .rebuild(&documents, journal.events())
         .map_err(|error| BootstrapError::Projection(error.to_string()))?;
 
-    Ok(ProjectSnapshot {
+    let snapshot = ProjectSnapshot {
         projection_revision: projection
             .projection_revision()
             .map_err(|error| BootstrapError::Projection(error.to_string()))?,
         development_board: projection
             .development_board_rows()
             .map_err(|error| BootstrapError::Projection(error.to_string()))?,
+    };
+
+    Ok(ProjectSession {
+        snapshot,
+        _writer_lease: writer_lease,
     })
 }
 

@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use gameforgo_bootstrap::{rebuild_project, validate_project};
+use gameforgo_bootstrap::{rebuild_project, start_project, validate_project};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -69,4 +69,19 @@ fn validates_and_rebuilds_a_project_through_one_composition_root() {
     assert_eq!(snapshot.development_board.len(), 1);
     assert_eq!(snapshot.development_board[0].task_id, "TASK-001");
     assert!(project.path().join(".game-dev/read-model.sqlite").is_file());
+}
+
+#[test]
+fn project_session_holds_the_single_writer_lease_until_it_is_dropped() {
+    let project = TempProject::create();
+    let session = start_project(project.path(), "desktop-coordinator").unwrap();
+
+    assert_eq!(session.snapshot().development_board.len(), 1);
+    let error = start_project(project.path(), "other-coordinator")
+        .err()
+        .expect("a second writer must be rejected");
+    assert!(error.to_string().contains("already owned"));
+
+    drop(session);
+    start_project(project.path(), "other-coordinator").unwrap();
 }
