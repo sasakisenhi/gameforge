@@ -351,9 +351,10 @@ fn supervisor_records_the_request_before_starting_and_advances_the_run() {
         project.path().join(".game-dev/events/events.jsonl"),
     );
 
+    let supervisor_context = command_context("CMD-SUPERVISOR-1");
     let started = session
         .run_supervisor(
-            command_context("CMD-SUPERVISOR-1"),
+            supervisor_context.clone(),
             "RUN-TASK-001-1",
             &mut execution,
         )
@@ -375,6 +376,12 @@ fn supervisor_records_the_request_before_starting_and_advances_the_run() {
     assert!(journal.contains("resource-lease-1"));
     assert!(journal.contains("worktree-lease-1"));
     assert!(journal.contains("agent-session-1"));
+
+    let retried = session
+        .run_supervisor(supervisor_context, "RUN-TASK-001-1", &mut execution)
+        .unwrap();
+    assert_eq!(retried, started);
+    assert_eq!(execution.calls.len(), 1);
 }
 
 #[test]
@@ -415,6 +422,55 @@ fn supervisor_returns_a_run_to_queue_when_resources_are_unavailable() {
     assert!(journal.contains("TaskRunStartRequested"));
     assert!(journal.contains("RESOURCE_UNAVAILABLE"));
     assert!(journal.contains("全実行枠が使用中"));
+}
+
+#[test]
+fn deferred_run_can_be_scheduled_again_and_started() {
+    let project = TempProject::create();
+    let mut session = start_project(project.path(), "desktop-coordinator").unwrap();
+    queue(&mut session, "CMD-QUEUE-1", "TASK-001", 0);
+    session
+        .run_scheduler(
+            command_context("CMD-SCHEDULER-1"),
+            ScheduleConfig {
+                max_concurrent_task_runs: 1,
+            },
+        )
+        .unwrap();
+    let journal_path = project.path().join(".game-dev/events/events.jsonl");
+    session
+        .run_supervisor(
+            command_context("CMD-SUPERVISOR-1"),
+            "RUN-TASK-001-1",
+            &mut FakeRunExecution::deferred(journal_path.clone()),
+        )
+        .unwrap();
+
+    let prepared_again = session
+        .run_scheduler(
+            command_context("CMD-SCHEDULER-2"),
+            ScheduleConfig {
+                max_concurrent_task_runs: 1,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        prepared_again.development_board[0].run_status.as_deref(),
+        Some("PREPARING")
+    );
+
+    let started = session
+        .run_supervisor(
+            command_context("CMD-SUPERVISOR-2"),
+            "RUN-TASK-001-1",
+            &mut FakeRunExecution::started(journal_path),
+        )
+        .unwrap();
+    assert_eq!(
+        started.development_board[0].run_status.as_deref(),
+        Some("AGENT_RUNNING")
+    );
+    assert_eq!(started.projection_revision, 7);
 }
 
 struct FakeRunExecution {

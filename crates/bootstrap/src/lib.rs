@@ -362,12 +362,27 @@ impl ProjectSession {
         &self,
         run_id: &str,
     ) -> Result<(TaskRun, EventEnvelope), BootstrapError> {
+        let (run, latest) = self.task_run_history(run_id)?;
+        let actual = latest.payload().get("state").cloned();
+        if actual.as_deref() != Some("PREPARING") {
+            return Err(BootstrapError::RunNotPreparing {
+                run_id: run_id.to_owned(),
+                actual,
+            });
+        }
+        Ok((run, latest))
+    }
+
+    fn task_run_history(
+        &self,
+        run_id: &str,
+    ) -> Result<(TaskRun, EventEnvelope), BootstrapError> {
         let queued = self.queued_event_for_run(run_id)?;
         let task_id = event_payload(queued, "task_id")?;
         let contract_revision = event_payload(queued, "contract_revision")?
             .parse::<u64>()
             .map_err(|_| BootstrapError::Journal("invalid contract_revision".to_owned()))?;
-        let run = TaskRun::new(
+        let mut run = TaskRun::new(
             TaskRunId::new(run_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
             TaskId::new(task_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
             ContractRevision::new(contract_revision)
@@ -375,25 +390,30 @@ impl ProjectSession {
             CommitSha::new(event_payload(queued, "base_commit")?)
                 .map_err(|error| BootstrapError::Journal(error.to_string()))?,
         );
-        let preparation = self
-            .journal
-            .events()
-            .iter()
-            .find(|event| {
-                event.event_type() == "TaskRunStateChanged"
-                    && event.header().aggregate.aggregate_id() == run_id
-                    && event.payload().get("state").map(String::as_str) == Some("PREPARING")
-            })
-            .cloned()
-            .ok_or_else(|| {
-                BootstrapError::Journal(format!(
-                    "PREPARING TaskRunStateChanged event not found for {run_id}"
-                ))
-            })?;
-        Ok((
-            evolve_task_run(run, &TaskRunEvent::PreparationStarted),
-            preparation,
-        ))
+        let mut latest = queued.clone();
+        for event in self.journal.events().iter().filter(|event| {
+            event.event_type() == "TaskRunStateChanged"
+                && event.header().aggregate.aggregate_id() == run_id
+        }) {
+            let domain_event = match event.payload().get("state").map(String::as_str) {
+                Some("PREPARING") => TaskRunEvent::PreparationStarted,
+                Some("QUEUED") => TaskRunEvent::PreparationDeferred,
+                Some("AGENT_RUNNING") => TaskRunEvent::AgentStarted,
+                Some(state) => {
+                    return Err(BootstrapError::Journal(format!(
+                        "unsupported reconstructed TaskRun state {state} for {run_id}"
+                    )));
+                }
+                None => {
+                    return Err(BootstrapError::Journal(format!(
+                        "TaskRunStateChanged event is missing state for {run_id}"
+                    )));
+                }
+            };
+            run = evolve_task_run(run, &domain_event);
+            latest = event.clone();
+        }
+        Ok((run, latest))
     }
 
     fn supervisor_retry(
@@ -446,19 +466,7 @@ impl ProjectSession {
         config: ScheduleConfig,
         run_id: &str,
     ) -> Result<EventEnvelope, BootstrapError> {
-        let queued = self.queued_event_for_run(run_id)?;
-        let task_id = event_payload(queued, "task_id")?;
-        let contract_revision = event_payload(queued, "contract_revision")?
-            .parse::<u64>()
-            .map_err(|_| BootstrapError::Journal("invalid contract_revision".to_owned()))?;
-        let run = TaskRun::new(
-            TaskRunId::new(run_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
-            TaskId::new(task_id).map_err(|error| BootstrapError::Journal(error.to_string()))?,
-            ContractRevision::new(contract_revision)
-                .map_err(|error| BootstrapError::Journal(error.to_string()))?,
-            CommitSha::new(event_payload(queued, "base_commit")?)
-                .map_err(|error| BootstrapError::Journal(error.to_string()))?,
-        );
+        let (run, latest) = self.task_run_history(run_id)?;
         let domain_events = decide_task_run(&run, TaskRunCommand::Prepare)
             .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
         if domain_events != [TaskRunEvent::PreparationStarted] {
@@ -468,7 +476,7 @@ impl ProjectSession {
         }
 
         let mut payload = BTreeMap::new();
-        payload.insert("task_id".to_owned(), task_id.to_owned());
+        payload.insert("task_id".to_owned(), run.task_id().as_str().to_owned());
         payload.insert("run_id".to_owned(), run_id.to_owned());
         payload.insert("state".to_owned(), "PREPARING".to_owned());
         payload.insert(
@@ -483,9 +491,9 @@ impl ProjectSession {
                 schema_version: SUPPORTED_SCHEMA_VERSION,
                 occurred_at: context.occurred_at.clone(),
                 aggregate,
-                aggregate_version: queued.header().aggregate_version + 1,
+                aggregate_version: latest.header().aggregate_version + 1,
                 correlation_id: context.command_id.clone(),
-                causation_id: Some(queued.header().event_id.clone()),
+                causation_id: Some(latest.header().event_id.clone()),
                 actor: context.actor.clone(),
             },
             "TaskRunStateChanged",
