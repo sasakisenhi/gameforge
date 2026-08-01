@@ -353,8 +353,7 @@ fn apply_task_run_event(
     if state == "INPUT_REQUIRED" {
         insert_input_request(transaction, event, task_id, run_id)?;
     } else if state == "AGENT_RUNNING"
-        && event.payload().get("resolution_kind").map(String::as_str)
-            == Some("INPUT_ANSWERED")
+        && event.payload().get("resolution_kind").map(String::as_str) == Some("INPUT_ANSWERED")
     {
         resolve_input_request(transaction, event)?;
     }
