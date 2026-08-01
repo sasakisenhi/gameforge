@@ -90,6 +90,8 @@ printf '%s\n' '{{"id":2,"result":{{"thread":{{"id":"thread-1"}}}}}}'
 read turn_start
 printf '%s\n' "$turn_start" >> '{}'
 printf '%s\n' '{{"id":3,"result":{{"turn":{{"id":"turn-1"}}}}}}'
+printf '%s\n' '{{"method":"item/completed","params":{{"item":{{"id":"command-red","type":"commandExecution","command":"cargo test -p game-logic","status":"failed","aggregatedOutput":"failures:\\n    sand_falls\\ntest result: FAILED. 0 passed; 1 failed","exitCode":101}}}}}}'
+printf '%s\n' '{{"method":"item/completed","params":{{"item":{{"id":"command-green","type":"commandExecution","command":"cargo test -p game-logic","status":"completed","aggregatedOutput":"test result: ok. 1 passed; 0 failed","exitCode":0}}}}}}'
 printf '%s\n' '{{"method":"turn/completed","params":{{"threadId":"thread-1","turn":{{"id":"turn-1","items":[],"status":"completed"}}}}}}'
 while read ignored; do :; done
 "#,
@@ -145,6 +147,8 @@ while read ignored; do :; done
         RunExecutionUpdate::Completed {
             task_run_id: "RUN-TASK-001-1".to_owned(),
             agent_session_id: "thread-1".to_owned(),
+            red_evidence_present: true,
+            green_evidence_present: true,
         }
     );
     assert_eq!(adapter.active_run_count(), 0);

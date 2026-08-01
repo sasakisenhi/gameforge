@@ -405,6 +405,17 @@ where
     }
 }
 
+/// Returns whether a repository-relative path belongs to the Task Contract's
+/// declared test scope.
+#[must_use]
+pub fn is_test_path(document: &TaskDocument, path: &str) -> bool {
+    is_safe_relative_path(path)
+        && document
+            .test_paths
+            .iter()
+            .any(|pattern| path_pattern_matches(pattern, path))
+}
+
 fn changed_path_violation(
     document: &TaskDocument,
     changed_path: &str,

@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use gameforge_application::{ApplicationCommand, RunExecutionPort};
+use gameforge_application::{ApplicationCommand, LocalVerificationPort, RunExecutionPort};
 use gameforge_bootstrap::{BootstrapError, CommandContext, ProjectCoordinator, ProjectSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,13 +68,14 @@ impl Drop for CoordinatorWorker {
 ///
 /// Returns an error for invalid context, a zero interval, initial scheduling failure, or thread
 /// creation failure.
-pub fn spawn_coordinator_worker<E>(
-    mut coordinator: ProjectCoordinator<E>,
+pub fn spawn_coordinator_worker<E, V>(
+    mut coordinator: ProjectCoordinator<E, V>,
     worker_context: CoordinatorWorkerContext,
     tick_interval: Duration,
 ) -> Result<CoordinatorWorker, BootstrapError>
 where
     E: RunExecutionPort + Send + 'static,
+    V: LocalVerificationPort + Send + 'static,
 {
     if tick_interval.is_zero() {
         return Err(BootstrapError::Coordinator(

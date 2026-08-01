@@ -132,6 +132,8 @@ Local Checkは最終的なテスト成功だけでなく、次を検証する。
 - 最終revisionで対象test、crate test、必要なworkspace testがGreenである。
 - testが時刻、ID、外部I/O、実行順に不必要に依存せず、再現可能である。
 
+現在の最初の実行縦切りでは、Codex App Serverの`item/completed`に含まれる`commandExecution.command`、`aggregatedOutput`、`exitCode`から、直接実行された`cargo test`の実テスト失敗と、その後の成功だけをRed/Green証拠として採用する。compile error、出力のないcommand、`--no-run`、複合shell commandは証拠不明として安全側に倒す。完全な`TddCycleEvidence`、test IDとの対応、production diffとの厳密な時系列検証は後続縦切りで追加する。
+
 CIは最終revisionのGreenと回帰がないことを再検証する。Red→Greenの時系列そのものは、Task RunのEvent Journal、revision、実行結果digestを正本とする。独立AI Reviewは、テストが実装詳細ではなく要求された振る舞いを検証しているか、重要な境界条件が不足していないかを確認する。
 
 ### Domain / Application / Scheduler
@@ -211,4 +213,3 @@ CIは最終revisionのGreenと回帰がないことを再検証する。Red→Gr
 10. commit不一致を拒否するend-to-end testを書き、Acceptanceとmerge gateを完成させる。
 
 初期段階から全テーブルや全Contextを作り切らず、「一つのTaskをQueueし、実行結果を記録し、Boardへ表示する」最小の縦切りで境界を検証する。
-

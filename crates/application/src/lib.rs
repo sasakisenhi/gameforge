@@ -426,6 +426,8 @@ pub enum RunExecutionUpdate {
     Completed {
         task_run_id: String,
         agent_session_id: String,
+        red_evidence_present: bool,
+        green_evidence_present: bool,
     },
     Failed {
         task_run_id: String,
@@ -455,6 +457,47 @@ pub trait RunExecutionPort {
         _request_id: &str,
         _answer: &str,
     ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalVerificationRequest {
+    pub task_run_id: String,
+    pub task_id: String,
+    pub base_commit: String,
+    pub worktree_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalVerificationUpdate {
+    Passed {
+        task_run_id: String,
+        head_commit: String,
+        changed_paths: Vec<String>,
+        completed_checks: Vec<String>,
+        final_suite_passed: bool,
+    },
+    Failed {
+        task_run_id: String,
+        detail: String,
+    },
+}
+
+/// Runs repository-local quality gates after an Agent turn completes.
+///
+/// Implementations start checks without blocking the coordinator and return
+/// terminal results from [`Self::poll_updates`].
+pub trait LocalVerificationPort {
+    fn start_verification(&mut self, request: &LocalVerificationRequest) -> Result<(), String>;
+
+    fn is_verification_active(&self, task_run_id: &str) -> bool;
+
+    fn poll_updates(&mut self) -> Vec<LocalVerificationUpdate> {
+        Vec::new()
+    }
+
+    fn cancel_verification(&mut self, _task_run_id: &str) -> Result<(), String> {
         Ok(())
     }
 }

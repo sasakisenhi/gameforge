@@ -2131,6 +2131,7 @@ dependencies = [
  "gameforge-application",
  "gameforge-bootstrap",
  "gameforge-codex-adapter",
+ "gameforge-local-check-adapter",
  "gameforge-runtime",
 ]
 
@@ -2144,6 +2145,13 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gameforge-local-check-adapter"
+version = "0.1.0"
+dependencies = [
+ "gameforge-application",
 ]
 
 [[package]]

@@ -11,8 +11,8 @@ use std::{
 };
 
 use gameforge_application::{
-    ApplicationCommand, RunExecutionPort, RunExecutionUpdate, RunLaunchOutcome, RunLaunchRequest,
-    StartedRun,
+    ApplicationCommand, LocalVerificationPort, LocalVerificationRequest, RunExecutionPort,
+    RunExecutionUpdate, RunLaunchOutcome, RunLaunchRequest, StartedRun,
 };
 use gameforge_bootstrap::{ProjectCoordinator, start_project};
 use gameforge_desktop::{CoordinatorWorkerContext, spawn_coordinator_worker};
@@ -53,6 +53,11 @@ struct FakeState {
 
 struct FakeExecution(Arc<Mutex<FakeState>>);
 
+#[derive(Default)]
+struct FakeVerification {
+    active: bool,
+}
+
 impl RunExecutionPort for FakeExecution {
     fn start_run(&mut self, request: &RunLaunchRequest) -> RunLaunchOutcome {
         RunLaunchOutcome::Started(
@@ -70,14 +75,26 @@ impl RunExecutionPort for FakeExecution {
     }
 }
 
+impl LocalVerificationPort for FakeVerification {
+    fn start_verification(&mut self, _request: &LocalVerificationRequest) -> Result<(), String> {
+        self.active = true;
+        Ok(())
+    }
+
+    fn is_verification_active(&self, _task_run_id: &str) -> bool {
+        self.active
+    }
+}
+
 #[test]
 fn worker_polls_execution_updates_without_an_additional_user_command() {
     let project = TempProject::create();
     let state = Arc::new(Mutex::new(FakeState::default()));
     let session = start_project(&project.0, "worker-test").unwrap();
-    let coordinator = ProjectCoordinator::new(
+    let coordinator = ProjectCoordinator::with_verification(
         session,
         FakeExecution(Arc::clone(&state)),
+        FakeVerification::default(),
         ScheduleConfig::default(),
     );
     let worker = spawn_coordinator_worker(
@@ -103,6 +120,8 @@ fn worker_polls_execution_updates_without_an_additional_user_command() {
         .push_back(RunExecutionUpdate::Completed {
             task_run_id: "RUN-TASK-001-1".to_owned(),
             agent_session_id: "agent-RUN-TASK-001-1".to_owned(),
+            red_evidence_present: true,
+            green_evidence_present: true,
         });
 
     let deadline = Instant::now() + Duration::from_secs(2);

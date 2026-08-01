@@ -47,6 +47,7 @@ Portは外部製品名ではなく、Applicationが必要とする能力で定�
 | `EventJournal` | append、aggregate stream読込 | JSONL等の追記専用記録 |
 | `GitWorkspace` | diff、branch、worktree、rebase、commit | Git CLI |
 | `AgentRuntime` | thread/turn開始、停止、event購読 | Codex App Server |
+| `LocalVerification` | worktreeのscope・品質gate実行、取消し、結果取得 | Git / Cargo process |
 | `CodeReviewService` | 独立レビュー要求、結果取得 | 別Codex session |
 | `RemoteVerification` | PR/check/runの要求・取得 | GitHub / Actions |
 | `ArtifactBuilder` | commitからBuild生成 | Cargo / Bevy build |
@@ -231,6 +232,7 @@ crates/
 ├─ runtime/                # ProjectCoordinator、Tokio worker、Run Supervisor
 ├─ codex-protocol/         # JSON-RPC wire DTOとcodec
 ├─ codex-adapter/          # AgentRuntime implementation
+├─ local-check-adapter/    # LocalVerification implementation
 ├─ git-adapter/            # GitWorkspace implementation
 ├─ github-adapter/         # RemoteVerification implementation
 ├─ conflict-analyzer/      # 解析record、pipeline、ConflictAnalyzer implementation
@@ -253,6 +255,7 @@ desktop / cli → bootstrap → runtime                            │
                          ├→ project-documents ─────────────────┤
                          ├→ event-journal ─────────────────────┤
                          ├→ codex-adapter ← codex-protocol ────┤
+                         ├→ local-check-adapter ────────────────┤
                          ├→ git-adapter ────────────────────────┤
                          ├→ github-adapter ─────────────────────┤
                          ├→ conflict-analyzer ──────────────────┤
@@ -287,6 +290,7 @@ desktop / cli → bootstrap → runtime                            │
 | Markdown/YAML parser | `project-documents` | 検証済みDocument DTO、Domain ID |
 | SQLite driver / SQL row | `persistence` | Query DTO、Projection更新結果 |
 | Codex JSON-RPC wire型 | `codex-protocol`、`codex-adapter` | `AgentRuntime`の内部DTOとEvent |
+| Local Check process / output | `local-check-adapter` | `LocalVerification`の要求・完了DTO |
 | Git executable/output | `git-adapter` | `GitWorkspace`の内部DTOと正規化error |
 | GitHub API/HTTP client型 | `github-adapter` | Verification DTOとEvidence |
 | `syn` AST型 | `conflict-analyzer`のparser module | `SymbolRecord`、`SymbolDelta` |
@@ -301,4 +305,3 @@ CIのアーキテクチャテストでは少なくとも次を検査する。
 - 外部protocol crateをFacade以外が直接参照していないこと。
 - Adapter crateが外部固有型をpublic APIから再公開していないこと。
 - Bevyがコントロールプレーンのdependency graphへ入っていないこと。
-

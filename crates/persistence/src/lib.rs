@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS inbox_rows (
     requested_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS task_run_health_flags (
+    task_run_id TEXT NOT NULL,
+    health_flag TEXT NOT NULL,
+    PRIMARY KEY (task_run_id, health_flag)
+);
+
 INSERT OR IGNORE INTO projection_meta(key, value) VALUES ('revision', 0);
 ";
 
@@ -148,6 +154,7 @@ impl ProjectionStore {
         transaction.execute("DELETE FROM applied_events", [])?;
         transaction.execute("DELETE FROM development_board_rows", [])?;
         transaction.execute("DELETE FROM inbox_rows", [])?;
+        transaction.execute("DELETE FROM task_run_health_flags", [])?;
         transaction.execute(
             "UPDATE projection_meta SET value = 0 WHERE key = 'revision'",
             [],
@@ -191,17 +198,31 @@ impl ProjectionStore {
 
     pub fn development_board_rows(&self) -> Result<Vec<DevelopmentBoardRow>, ProjectionError> {
         let mut statement = self.connection.prepare(
-            "SELECT task_id, title, task_status, current_run_id, run_status
+            "SELECT task_id, title, task_status, current_run_id, run_status,
+                    COALESCE((
+                        SELECT GROUP_CONCAT(health_flag, char(31))
+                        FROM (
+                            SELECT health_flag
+                            FROM task_run_health_flags
+                            WHERE task_run_id = development_board_rows.current_run_id
+                            ORDER BY health_flag
+                        )
+                    ), '')
              FROM development_board_rows ORDER BY task_id",
         )?;
         let rows = statement.query_map([], |row| {
+            let health_flags = row.get::<_, String>(5)?;
             Ok(DevelopmentBoardRow {
                 task_id: row.get(0)?,
                 title: row.get(1)?,
                 task_status: row.get(2)?,
                 current_run_id: row.get(3)?,
                 run_status: row.get(4)?,
-                health_flags: Vec::new(),
+                health_flags: if health_flags.is_empty() {
+                    Vec::new()
+                } else {
+                    health_flags.split('\u{1f}').map(str::to_owned).collect()
+                },
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -269,43 +290,7 @@ fn apply_event_in_transaction(
     }
 
     match event.event_type() {
-        "TaskRunQueued" | "TaskRunStateChanged" => {
-            let task_id = payload(event, "task_id")?;
-            let run_id = payload(event, "run_id")?;
-            let aggregate_id = header.aggregate.aggregate_id();
-            if run_id != aggregate_id {
-                return Err(ProjectionError::TaskRunIdMismatch {
-                    event_type: event.event_type().to_owned(),
-                    payload_run_id: run_id.to_owned(),
-                    aggregate_id: aggregate_id.to_owned(),
-                });
-            }
-            let state = event
-                .payload()
-                .get("state")
-                .map_or("QUEUED", String::as_str);
-            let current_run_id = (state != "CANCELLED").then_some(run_id);
-            let updated = transaction.execute(
-                "UPDATE development_board_rows
-                 SET current_run_id = ?1, run_status = ?2
-                 WHERE task_id = ?3",
-                params![current_run_id, state, task_id],
-            )?;
-            if updated == 0 {
-                return Err(ProjectionError::TaskNotFound {
-                    event_type: event.event_type().to_owned(),
-                    task_id: task_id.to_owned(),
-                });
-            }
-            if state == "INPUT_REQUIRED" {
-                insert_input_request(transaction, event, task_id, run_id)?;
-            } else if state == "AGENT_RUNNING"
-                && event.payload().get("resolution_kind").map(String::as_str)
-                    == Some("INPUT_ANSWERED")
-            {
-                resolve_input_request(transaction, event)?;
-            }
-        }
+        "TaskRunQueued" | "TaskRunStateChanged" => apply_task_run_event(transaction, event)?,
         _ => {}
     }
 
@@ -331,6 +316,54 @@ fn apply_event_in_transaction(
         "UPDATE projection_meta SET value = value + 1 WHERE key = 'revision'",
         [],
     )?;
+    Ok(())
+}
+
+fn apply_task_run_event(
+    transaction: &Transaction<'_>,
+    event: &EventEnvelope,
+) -> Result<(), ProjectionError> {
+    let task_id = payload(event, "task_id")?;
+    let run_id = payload(event, "run_id")?;
+    let aggregate_id = event.header().aggregate.aggregate_id();
+    if run_id != aggregate_id {
+        return Err(ProjectionError::TaskRunIdMismatch {
+            event_type: event.event_type().to_owned(),
+            payload_run_id: run_id.to_owned(),
+            aggregate_id: aggregate_id.to_owned(),
+        });
+    }
+    let state = event
+        .payload()
+        .get("state")
+        .map_or("QUEUED", String::as_str);
+    let current_run_id = (state != "CANCELLED").then_some(run_id);
+    let updated = transaction.execute(
+        "UPDATE development_board_rows
+         SET current_run_id = ?1, run_status = ?2
+         WHERE task_id = ?3",
+        params![current_run_id, state, task_id],
+    )?;
+    if updated == 0 {
+        return Err(ProjectionError::TaskNotFound {
+            event_type: event.event_type().to_owned(),
+            task_id: task_id.to_owned(),
+        });
+    }
+    if state == "INPUT_REQUIRED" {
+        insert_input_request(transaction, event, task_id, run_id)?;
+    } else if state == "AGENT_RUNNING"
+        && event.payload().get("resolution_kind").map(String::as_str) == Some("INPUT_ANSWERED")
+    {
+        resolve_input_request(transaction, event)?;
+    }
+    if let Some(health_flag) = event.payload().get("health_flag") {
+        transaction.execute(
+            "INSERT OR IGNORE INTO task_run_health_flags(task_run_id, health_flag)
+             VALUES (?1, ?2)",
+            params![run_id, health_flag],
+        )?;
+    }
     Ok(())
 }
 

@@ -123,6 +123,7 @@ impl CodexRunExecution {
                 receiver,
                 agent_session_id: thread_id,
                 pending_inputs: BTreeMap::new(),
+                tdd_evidence: TddEvidence::default(),
             },
         );
         Ok(started)
@@ -422,6 +423,7 @@ struct ActiveRun {
     receiver: Receiver<ProtocolMessage>,
     agent_session_id: String,
     pending_inputs: BTreeMap<String, PendingInput>,
+    tdd_evidence: TddEvidence,
 }
 
 struct StartedProcess {
@@ -461,6 +463,10 @@ fn process_message(
         }
     };
     match message.get("method").and_then(Value::as_str) {
+        Some("item/completed") => {
+            active.tdd_evidence.observe_item(&message);
+            MessageOutcome::None
+        }
         Some("turn/completed") => {
             let status = message
                 .pointer("/params/turn/status")
@@ -470,6 +476,8 @@ fn process_message(
                 MessageOutcome::Update(RunExecutionUpdate::Completed {
                     task_run_id: run_id.to_owned(),
                     agent_session_id: active.agent_session_id.clone(),
+                    red_evidence_present: active.tdd_evidence.red,
+                    green_evidence_present: active.tdd_evidence.green_after_red,
                 })
             } else {
                 let detail = message
@@ -531,6 +539,66 @@ fn process_message(
         }
         _ => MessageOutcome::None,
     }
+}
+
+#[derive(Default)]
+struct TddEvidence {
+    red: bool,
+    green_after_red: bool,
+}
+
+impl TddEvidence {
+    fn observe_item(&mut self, message: &Value) {
+        let Some(item) = message.pointer("/params/item") else {
+            return;
+        };
+        if item.get("type").and_then(Value::as_str) != Some("commandExecution") {
+            return;
+        }
+        let Some(command) = item.get("command").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(output) = item.get("aggregatedOutput").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(exit_code) = item.get("exitCode").and_then(Value::as_i64) else {
+            return;
+        };
+        if !is_direct_cargo_test(command) {
+            return;
+        }
+        let output = output.to_ascii_lowercase();
+        if exit_code != 0
+            && (output.contains("test result: failed") || output.contains("failures:"))
+        {
+            self.red = true;
+            self.green_after_red = false;
+        } else if exit_code == 0 && self.red && output.contains("test result: ok") {
+            self.green_after_red = true;
+        }
+    }
+}
+
+fn is_direct_cargo_test(command: &str) -> bool {
+    if ["&&", "||", ";", "\n", "|", "`", "$("]
+        .iter()
+        .any(|operator| command.contains(operator))
+    {
+        return false;
+    }
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    let Some(program) = tokens.first() else {
+        return false;
+    };
+    let program = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    if !matches!(program, "cargo" | "cargo.exe") || tokens.contains(&"--no-run") {
+        return false;
+    }
+    let command_index = usize::from(tokens.get(1).is_some_and(|token| token.starts_with('+'))) + 1;
+    tokens.get(command_index) == Some(&"test")
 }
 
 fn spawn_protocol_reader(
@@ -645,7 +713,7 @@ fn git_output(worktree: &Path, arguments: &[&str]) -> Result<String, StartFailur
 
 fn task_prompt(request: &RunLaunchRequest, source: &str) -> String {
     format!(
-        "You are implementing GameForge Task Run {} for Task {} at contract revision {}.\n\nFollow the Task Contract below exactly. Work only inside this Git worktree, use TDD, run the relevant tests, and commit the completed changes on the assigned branch. Do not modify paths outside allowed_paths and test_paths.\n\n{}",
+        "You are implementing GameForge Task Run {} for Task {} at contract revision {}.\n\nFollow the Task Contract below exactly. Work only inside this Git worktree and commit the completed changes on the assigned branch. For behavior changes, use TDD: run the relevant cargo test to observe a genuine failing test before implementation, then run it again to observe the passing result. Run the relevant final tests before finishing. Do not modify paths outside allowed_paths and test_paths.\n\n{}",
         request.task_run_id, request.task_id, request.contract_revision, source
     )
 }
@@ -680,5 +748,72 @@ impl StartFailure {
             reason: RunLaunchDeferral::AgentUnavailable,
             detail: detail.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{TddEvidence, is_direct_cargo_test};
+
+    #[test]
+    fn records_red_only_when_a_failing_test_is_followed_by_green() {
+        let mut evidence = TddEvidence::default();
+        evidence.observe_item(&command_item(
+            "cargo test -p game-logic",
+            "failures:\n    sand_falls\ntest result: FAILED. 0 passed; 1 failed",
+            101,
+        ));
+        assert!(evidence.red);
+        assert!(!evidence.green_after_red);
+
+        evidence.observe_item(&command_item(
+            "cargo test -p game-logic",
+            "test result: ok. 1 passed; 0 failed",
+            0,
+        ));
+        assert!(evidence.green_after_red);
+    }
+
+    #[test]
+    fn ignores_compile_failures_and_ambiguous_shell_commands() {
+        let mut evidence = TddEvidence::default();
+        evidence.observe_item(&command_item(
+            "cargo test",
+            "error[E0308]: mismatched types",
+            101,
+        ));
+        evidence.observe_item(&command_item(
+            "echo cargo test; false",
+            "failures:\ntest result: FAILED",
+            1,
+        ));
+
+        assert!(!evidence.red);
+        assert!(!evidence.green_after_red);
+    }
+
+    #[test]
+    fn recognizes_direct_cargo_test_without_accepting_compile_only_runs() {
+        assert!(is_direct_cargo_test("cargo test --workspace"));
+        assert!(is_direct_cargo_test("/usr/bin/cargo +stable test -p game"));
+        assert!(!is_direct_cargo_test("cargo test --no-run"));
+        assert!(!is_direct_cargo_test("cargo test && cargo fmt"));
+    }
+
+    fn command_item(command: &str, output: &str, exit_code: i64) -> serde_json::Value {
+        json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "commandExecution",
+                    "command": command,
+                    "status": if exit_code == 0 { "completed" } else { "failed" },
+                    "aggregatedOutput": output,
+                    "exitCode": exit_code
+                }
+            }
+        })
     }
 }

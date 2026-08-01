@@ -23,6 +23,8 @@ AI並列ゲーム開発コントロールプレーンの実装です。設計資
 - 外部起動前のOperation記録と、lease取得結果を扱うRun Supervisor境界
 - Task RunごとのGit worktree作成とCodex App Server起動を行う実`RunExecutionPort`
 - Codexの完了・失敗・入力要求とRun取消しを監視し、空いた実行枠を補充するCoordinator worker
+- Codex完了後にscope、format、lint、test、buildを非同期実行する実`LocalVerificationPort`
+- Local Checkの出力commit、変更path、TDD Red/Green、失敗理由、health flagのEvent Journal永続化
 
 ## Desktop
 
@@ -49,9 +51,11 @@ Agentから入力が必要になったRunは`INPUT_REQUIRED`へ遷移し、要�
 
 Run Supervisorは外部Adapterを呼ぶ前に`TaskRunStartRequested`を記録し、Git worktreeとCodex threadを実際に作成できた場合だけ`AGENT_RUNNING`へ進めます。Task Contractをpromptへ含め、各worktree内でCodex App Serverの`thread/start`と`turn/start`を実行します。Codexは`workspace-write`、network無効、承認要求なしで起動します。
 
-Coordinator workerは250ms間隔でCodexの通知を監視します。turn完了時はRunを`LOCAL_CHECKING`、異常終了時は`FAILED`へ進め、取消時はCodex processを停止します。いずれも実行枠を解放した直後にQueueを再評価するため、待機中のRunが自動的に開始されます。資源を確保できない場合はRunを失敗扱いせず`QUEUED`へ戻し、後から再スケジュールします。worktreeは取消し・完了後も成果物確認と後続統合のため保持します。
+Coordinator workerは250ms間隔でCodexの通知を監視します。turn完了時はRunを`LOCAL_CHECKING`、異常終了時は`FAILED`へ進め、取消時はCodex processを停止します。いずれもAgent実行枠を解放した直後にQueueを再評価するため、Local Checkと次のCodex Runを並行でき、待機中のRunが自動的に開始されます。資源を確保できない場合はRunを失敗扱いせず`QUEUED`へ戻し、後から再スケジュールします。worktreeは取消し・完了後も成果物確認と後続統合のため保持します。
 
-実行ログは`.game-dev/runtime/runs/<run-id>/`、worktreeは`.game-dev/worktrees/<run-id>/`に作成します。Codex turn後のローカルcheck実行と統合処理は、この縦切りの次段階です。
+Local Checkは、記録済みworktreeと一致すること、未commit変更がないこと、base commitがHEADの祖先であることを先に検査します。その後、renameの旧pathと新pathを含む全変更をTask Contractの`allowed_paths`、`test_paths`、`forbidden_paths`と照合し、`cargo fmt --all -- --check`、Clippy、workspace test、workspace buildを順番に実行します。すべてのgateを通ったRunだけを出力commit付きの`SUCCEEDED`へ進めます。scope違反や、振る舞い変更に実際の`cargo test` Red証拠がない場合は`FAILED`とし、`SCOPE_VIOLATION`または`TDD_SEQUENCE_VIOLATION`を表示用Projectionへ残します。Coordinator再起動時は、Event Journal上で`LOCAL_CHECKING`のRunを新しいworkerが再開します。
+
+実行ログは`.game-dev/runtime/runs/<run-id>/`、worktreeは`.game-dev/worktrees/<run-id>/`に作成します。Integration Candidateの作成と統合処理は、この縦切りの次段階です。
 
 ## CLI
 
@@ -76,7 +80,8 @@ examples/powder-game/.game-dev/
 ├── runtime/
 │   └── runs/<run-id>/
 │       ├── codex-events.jsonl
-│       └── codex-stderr.log
+│       ├── codex-stderr.log
+│       └── local-checks.log
 └── worktrees/<run-id>/
 ```
 
