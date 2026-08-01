@@ -63,6 +63,16 @@ impl ProjectSession {
                 task_run_id,
                 expected_projection_revision,
             } => self.cancel_task_run(context, &task_run_id, expected_projection_revision),
+            ApplicationCommand::AnswerInputRequest {
+                request_id,
+                answer,
+                expected_projection_revision,
+            } => self.answer_input_request(
+                context,
+                &request_id,
+                &answer,
+                expected_projection_revision,
+            ),
         }
     }
 
@@ -456,6 +466,103 @@ impl ProjectSession {
         Ok(self.snapshot.clone())
     }
 
+    fn answer_input_request(
+        &mut self,
+        context: CommandContext,
+        request_id: &str,
+        answer: &str,
+        expected_projection_revision: u64,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        validate_required("request_id", request_id)?;
+        validate_required("answer", answer)?;
+        if let Some(previous) = self
+            .journal
+            .events()
+            .iter()
+            .find(|event| event.header().correlation_id == context.command_id)
+        {
+            let same_command = previous.event_type() == "TaskRunStateChanged"
+                && previous.payload().get("state").map(String::as_str) == Some("AGENT_RUNNING")
+                && previous
+                    .payload()
+                    .get("resolved_request_id")
+                    .map(String::as_str)
+                    == Some(request_id)
+                && previous.payload().get("input_answer").map(String::as_str) == Some(answer)
+                && previous
+                    .payload()
+                    .get("expected_projection_revision")
+                    .and_then(|revision| revision.parse::<u64>().ok())
+                    == Some(expected_projection_revision)
+                && previous.header().actor == context.actor
+                && previous.header().occurred_at == context.occurred_at;
+            return if same_command {
+                Ok(self.snapshot.clone())
+            } else {
+                Err(BootstrapError::CommandIdConflict(context.command_id))
+            };
+        }
+
+        let actual_revision = self.snapshot.projection_revision;
+        if expected_projection_revision != actual_revision {
+            return Err(BootstrapError::ProjectionRevisionConflict {
+                expected: expected_projection_revision,
+                actual: actual_revision,
+            });
+        }
+        let request = self
+            .snapshot
+            .inbox
+            .iter()
+            .find(|item| item.request_id == request_id)
+            .ok_or_else(|| BootstrapError::InputRequestNotFound(request_id.to_owned()))?;
+        if request.status != "PENDING" {
+            return Err(BootstrapError::InputRequestNotPending {
+                request_id: request_id.to_owned(),
+                actual: request.status.clone(),
+            });
+        }
+        let run_id = request.task_run_id.clone();
+        let row = self
+            .snapshot
+            .development_board
+            .iter()
+            .find(|row| row.current_run_id.as_deref() == Some(run_id.as_str()))
+            .ok_or_else(|| BootstrapError::RunNotFound(run_id.clone()))?;
+        if row.run_status.as_deref() != Some("INPUT_REQUIRED") {
+            return Err(BootstrapError::RunStateConflict {
+                run_id,
+                expected: "INPUT_REQUIRED",
+                actual: row.run_status.clone(),
+            });
+        }
+
+        let (run, latest) = self.task_run_history(&request.task_run_id)?;
+        let domain_events = decide_task_run(&run, TaskRunCommand::ResumeAfterInput)
+            .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        if domain_events != [TaskRunEvent::InputProvided] {
+            return Err(BootstrapError::InvalidCommand(
+                "ResumeAfterInput must emit InputProvided".to_owned(),
+            ));
+        }
+        let event = input_answered_event(
+            &context,
+            &run,
+            &latest,
+            request_id,
+            answer,
+            expected_projection_revision,
+        )?;
+        self.journal
+            .append(&event)
+            .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+        self.projection
+            .apply_event(&event)
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+        self.refresh_snapshot()?;
+        Ok(self.snapshot.clone())
+    }
+
     fn refresh_snapshot(&mut self) -> Result<(), BootstrapError> {
         self.snapshot = ProjectSnapshot {
             projection_revision: self
@@ -548,6 +655,12 @@ impl ProjectSession {
             let domain_event = match event.payload().get("state").map(String::as_str) {
                 Some("PREPARING") => TaskRunEvent::PreparationStarted,
                 Some("QUEUED") => TaskRunEvent::PreparationDeferred,
+                Some("AGENT_RUNNING")
+                    if event.payload().get("resolution_kind").map(String::as_str)
+                        == Some("INPUT_ANSWERED") =>
+                {
+                    TaskRunEvent::InputProvided
+                }
                 Some("AGENT_RUNNING") => TaskRunEvent::AgentStarted,
                 Some("INPUT_REQUIRED") => TaskRunEvent::InputRequired,
                 Some("CANCELLED") => TaskRunEvent::Cancelled,
@@ -688,6 +801,11 @@ pub enum BootstrapError {
     },
     OperationOutcomeUnknown(String),
     InputRequestAlreadyExists(String),
+    InputRequestNotFound(String),
+    InputRequestNotPending {
+        request_id: String,
+        actual: String,
+    },
     RunStateConflict {
         run_id: String,
         expected: &'static str,
@@ -736,6 +854,13 @@ impl fmt::Display for BootstrapError {
             Self::InputRequestAlreadyExists(request_id) => {
                 write!(formatter, "Input request already exists: {request_id}")
             }
+            Self::InputRequestNotFound(request_id) => {
+                write!(formatter, "Input request not found: {request_id}")
+            }
+            Self::InputRequestNotPending { request_id, actual } => write!(
+                formatter,
+                "Input request is not PENDING: {request_id} ({actual})"
+            ),
             Self::RunStateConflict {
                 run_id,
                 expected,
@@ -948,6 +1073,45 @@ fn input_required_event(
     EventEnvelope::new(
         EventHeader {
             event_id: format!("EVT-{}-INPUT-REQUIRED", context.command_id),
+            schema_version: SUPPORTED_SCHEMA_VERSION,
+            occurred_at: context.occurred_at.clone(),
+            aggregate,
+            aggregate_version: latest.header().aggregate_version + 1,
+            correlation_id: context.command_id.clone(),
+            causation_id: Some(latest.header().event_id.clone()),
+            actor: context.actor.clone(),
+        },
+        "TaskRunStateChanged",
+        payload,
+    )
+    .map_err(|error| BootstrapError::Journal(error.to_string()))
+}
+
+fn input_answered_event(
+    context: &CommandContext,
+    run: &TaskRun,
+    latest: &EventEnvelope,
+    request_id: &str,
+    answer: &str,
+    expected_projection_revision: u64,
+) -> Result<EventEnvelope, BootstrapError> {
+    let run_id = run.id().as_str();
+    let mut payload = BTreeMap::new();
+    payload.insert("task_id".to_owned(), run.task_id().as_str().to_owned());
+    payload.insert("run_id".to_owned(), run_id.to_owned());
+    payload.insert("state".to_owned(), "AGENT_RUNNING".to_owned());
+    payload.insert("resolved_request_id".to_owned(), request_id.to_owned());
+    payload.insert("resolution_kind".to_owned(), "INPUT_ANSWERED".to_owned());
+    payload.insert("input_answer".to_owned(), answer.to_owned());
+    payload.insert(
+        "expected_projection_revision".to_owned(),
+        expected_projection_revision.to_string(),
+    );
+    let aggregate = AggregateRef::new("TaskRun", run_id)
+        .map_err(|error| BootstrapError::Journal(error.to_string()))?;
+    EventEnvelope::new(
+        EventHeader {
+            event_id: format!("EVT-{}-INPUT-ANSWERED", context.command_id),
             schema_version: SUPPORTED_SCHEMA_VERSION,
             occurred_at: context.occurred_at.clone(),
             aggregate,

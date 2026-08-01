@@ -2,8 +2,8 @@
 
 use dioxus::prelude::*;
 use gameforge_application::{
-    AppShellView, ApplicationCommand, BoardIntent, ConnectionState, TaskRowView,
-    command_for_board_intent,
+    AppShellView, ApplicationCommand, BoardIntent, ConnectionState, InboxIntent, InboxItemView,
+    TaskRowView, command_for_board_intent, command_for_inbox_intent,
 };
 
 const APP_CSS: &str = include_str!("app.css");
@@ -107,6 +107,9 @@ pub fn execute_board_intent(
         ApplicationCommand::CancelTaskRun { task_run_id, .. } => {
             CommandTarget::CancelRun(task_run_id.clone())
         }
+        ApplicationCommand::AnswerInputRequest { request_id, .. } => {
+            CommandTarget::AnswerInput(request_id.clone())
+        }
     };
     match execute(command) {
         CommandResult::Unavailable => CommandEffect {
@@ -137,6 +140,10 @@ pub fn execute_board_intent(
                     "Run取消し完了: {run_id} / CANCELLED / projection rev {}",
                     updated_view.projection_revision
                 ),
+                CommandTarget::AnswerInput(request_id) => format!(
+                    "入力回答完了: {request_id} / projection rev {}",
+                    updated_view.projection_revision
+                ),
             };
             CommandEffect {
                 notice,
@@ -148,6 +155,7 @@ pub fn execute_board_intent(
             notice: match target {
                 CommandTarget::QueueTask(_) => format!("Queue登録失敗: {error}"),
                 CommandTarget::CancelRun(_) => format!("Run取消し失敗: {error}"),
+                CommandTarget::AnswerInput(_) => format!("入力回答失敗: {error}"),
             },
         },
     }
@@ -156,6 +164,63 @@ pub fn execute_board_intent(
 enum CommandTarget {
     QueueTask(String),
     CancelRun(String),
+    AnswerInput(String),
+}
+
+#[must_use]
+pub fn execute_inbox_intent(
+    view: &AppShellView,
+    intent: InboxIntent,
+    execute: impl FnOnce(ApplicationCommand) -> CommandResult,
+) -> CommandEffect {
+    let command = match command_for_inbox_intent(view, intent) {
+        Ok(command) => command,
+        Err(error) => {
+            return CommandEffect {
+                updated_view: None,
+                notice: format!("回答できません: {error}"),
+            };
+        }
+    };
+    let ApplicationCommand::AnswerInputRequest { request_id, .. } = &command else {
+        return CommandEffect {
+            updated_view: None,
+            notice: "回答Commandを作成できませんでした".to_owned(),
+        };
+    };
+    let request_id = request_id.clone();
+    match execute(command) {
+        CommandResult::Unavailable => CommandEffect {
+            updated_view: None,
+            notice: format!("入力回答を準備しました: {request_id}"),
+        },
+        CommandResult::Applied(updated_view) => {
+            let updated_view = *updated_view;
+            let run_status = updated_view
+                .inbox
+                .items
+                .iter()
+                .find(|item| item.request_id == request_id)
+                .and_then(|item| {
+                    updated_view.development.task_rows.iter().find(|row| {
+                        row.current_run_id.as_deref() == Some(item.task_run_id.as_str())
+                    })
+                })
+                .and_then(|row| row.run_status.as_deref())
+                .unwrap_or("状態未確認");
+            CommandEffect {
+                notice: format!(
+                    "入力回答完了: {request_id} / {run_status} / projection rev {}",
+                    updated_view.projection_revision
+                ),
+                updated_view: Some(updated_view),
+            }
+        }
+        CommandResult::Failed(error) => CommandEffect {
+            updated_view: None,
+            notice: format!("入力回答失敗: {error}"),
+        },
+    }
 }
 
 #[must_use]
@@ -165,7 +230,12 @@ pub fn render_app(view: &AppShellView) -> String {
 
 #[must_use]
 pub fn render_inbox(view: &AppShellView) -> String {
-    dioxus_ssr::render_element(inbox_page(view))
+    dioxus_ssr::render_element(rsx! { InboxPreview { view: view.clone() } })
+}
+
+#[component]
+fn InboxPreview(view: AppShellView) -> Element {
+    inbox_page(&view, None, None, None)
 }
 
 #[component]
@@ -302,7 +372,12 @@ pub fn App(
                                 app_view,
                                 on_command,
                             ),
-                            Route::Inbox => inbox_page(&view),
+                            Route::Inbox => inbox_page(
+                                &view,
+                                Some(command_notice),
+                                Some(app_view),
+                                on_command,
+                            ),
                             route => placeholder(route),
                         }
                     }
@@ -716,35 +791,24 @@ fn status_pill(status: &str, category: &str) -> Element {
     rsx! { span { class: "status-pill {category} {normalized}", "{status}" } }
 }
 
-fn inbox_page(view: &AppShellView) -> Element {
+fn inbox_page(
+    view: &AppShellView,
+    command_notice: Option<Signal<Option<String>>>,
+    app_view: Option<Signal<AppShellView>>,
+    on_command: Option<Callback<ApplicationCommand, CommandResult>>,
+) -> Element {
     let has_items = !view.inbox.items.is_empty();
+    let mutations_available =
+        matches!(view.connection, ConnectionState::Connected) && !view.is_stale;
     let items = view.inbox.items.iter().map(|item| {
-        rsx! {
-            article { class: "inbox-item", key: "{item.request_id}",
-                header {
-                    div {
-                        span { class: "inbox-kind", "{item.request_kind}" }
-                        strong { "{item.request_id}" }
-                    }
-                    {status_pill(&item.status, "request")}
-                }
-                p { class: "inbox-prompt", "{item.prompt}" }
-                dl {
-                    div {
-                        dt { "TASK" }
-                        dd { "{item.task_id}" }
-                    }
-                    div {
-                        dt { "RUN" }
-                        dd { "{item.task_run_id}" }
-                    }
-                    div {
-                        dt { "REQUESTED" }
-                        dd { "{item.requested_at}" }
-                    }
-                }
-            }
-        }
+        inbox_item(
+            item,
+            view,
+            mutations_available,
+            command_notice,
+            app_view,
+            on_command,
+        )
     });
     rsx! {
         section { class: "page inbox-page",
@@ -766,6 +830,88 @@ fn inbox_page(view: &AppShellView) -> Element {
                     h3 { "対応待ちの入力要求はありません" }
                     p { "Agentから入力要求が届くと、ここにTaskとRunを表示します。" }
                 }
+            }
+        }
+    }
+}
+
+fn inbox_item(
+    item: &InboxItemView,
+    view: &AppShellView,
+    mutations_available: bool,
+    command_notice: Option<Signal<Option<String>>>,
+    app_view: Option<Signal<AppShellView>>,
+    on_command: Option<Callback<ApplicationCommand, CommandResult>>,
+) -> Element {
+    let request_id = item.request_id.clone();
+    let command_view = view.clone();
+    rsx! {
+        article { class: "inbox-item", key: "{item.request_id}",
+            header {
+                div {
+                    span { class: "inbox-kind", "{item.request_kind}" }
+                    strong { "{item.request_id}" }
+                }
+                {status_pill(&item.status, "request")}
+            }
+            p { class: "inbox-prompt", "{item.prompt}" }
+            dl {
+                div {
+                    dt { "TASK" }
+                    dd { "{item.task_id}" }
+                }
+                div {
+                    dt { "RUN" }
+                    dd { "{item.task_run_id}" }
+                }
+                div {
+                    dt { "REQUESTED" }
+                    dd { "{item.requested_at}" }
+                }
+            }
+            if item.status == "PENDING" {
+                form {
+                    class: "answer-form",
+                    onsubmit: move |event| {
+                        event.prevent_default();
+                        let answer = match event.get_first("answer") {
+                            Some(FormValue::Text(answer)) => answer,
+                            _ => String::new(),
+                        };
+                        let effect = execute_inbox_intent(
+                            &command_view,
+                            InboxIntent::AnswerInput {
+                                request_id: request_id.clone(),
+                                answer,
+                            },
+                            |command| on_command.map_or(
+                                CommandResult::Unavailable,
+                                |callback| callback.call(command),
+                            ),
+                        );
+                        if let (Some(updated_view), Some(mut signal)) =
+                            (effect.updated_view, app_view)
+                        {
+                            signal.set(updated_view);
+                        }
+                        if let Some(mut signal) = command_notice {
+                            signal.set(Some(effect.notice));
+                        }
+                    },
+                    textarea {
+                        name: "answer",
+                        required: true,
+                        disabled: !mutations_available,
+                        placeholder: "Agentへ返す回答を入力してください",
+                    }
+                    button {
+                        r#type: "submit",
+                        disabled: !mutations_available,
+                        "Submit Answer"
+                    }
+                }
+            } else {
+                p { class: "answer-complete", "この要求には回答済みです。" }
             }
         }
     }
@@ -835,6 +981,13 @@ fn command_description(command: &ApplicationCommand) -> String {
             expected_projection_revision,
         } => format!(
             "CancelTaskRunを準備しました: {task_run_id} / expected rev {expected_projection_revision}"
+        ),
+        ApplicationCommand::AnswerInputRequest {
+            request_id,
+            expected_projection_revision,
+            ..
+        } => format!(
+            "AnswerInputRequestを準備しました: {request_id} / expected rev {expected_projection_revision}"
         ),
     }
 }
