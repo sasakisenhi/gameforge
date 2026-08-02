@@ -11,6 +11,45 @@ use sha2::{Digest, Sha256};
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
+/// Structured output expected from the task-generation conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDraft {
+    pub id: String,
+    pub title: String,
+    pub purpose: String,
+    pub acceptance_criteria: Vec<String>,
+    pub allowed_paths: Vec<String>,
+    pub test_paths: Vec<String>,
+    pub forbidden_paths: Vec<String>,
+}
+
+/// Render a draft into the canonical Markdown format used by the project.
+///
+/// The result is still passed through `load_task_document` before persistence.
+#[must_use]
+pub fn render_task_markdown(draft: &TaskDraft) -> String {
+    let list = |items: &[String]| {
+        if items.is_empty() {
+            "[]".to_owned()
+        } else {
+            items
+                .iter()
+                .map(|item| format!("  - {item}\n"))
+                .collect::<String>()
+        }
+    };
+    format!(
+        "---\nschema_version: 1\nid: {}\ntitle: {}\nstatus: draft\ncontract_revision: 1\nacceptance_criteria:\n{}dependencies: []\nallowed_paths:\n{}test_paths:\n{}forbidden_paths:\n{}risk: low\n---\n\n# 目的\n\n{}\n",
+        draft.id,
+        draft.title,
+        list(&draft.acceptance_criteria),
+        list(&draft.allowed_paths),
+        list(&draft.test_paths),
+        list(&draft.forbidden_paths),
+        draft.purpose,
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocumentError {
     MissingFrontMatter,
