@@ -205,10 +205,26 @@ pub(crate) fn development_board(
                 td { class: "actions",
                     if let Some(run_id) = cancel_id {
                         if row.run_status.as_deref() == Some("FAILED") {
-                            span {
-                                class: "failed-action-state",
-                                title: "FAILED状態のRunは取消しできません。ログを確認して再実行してください。",
-                                "FAILED"
+                            button {
+                                class: "retry-button",
+                                disabled: !row.can_queue,
+                                title: "FAILED Runを新しいAttemptとして再実行",
+                                onclick: move |event| {
+                                    event.stop_propagation();
+                                    let effect = execute_board_intent(
+                                        &command_view,
+                                        BoardIntent::QueueTask { task_id: queue_id.clone() },
+                                        |command| command_callback.map_or(
+                                            CommandResult::Unavailable,
+                                            |callback| callback.call(command),
+                                        ),
+                                    );
+                                    if let Some(updated_view) = effect.updated_view {
+                                        view_signal.set(updated_view);
+                                    }
+                                    notice_signal.set(Some(effect.notice));
+                                },
+                                "Retry Run"
                             }
                         } else {
                         button {

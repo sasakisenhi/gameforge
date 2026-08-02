@@ -331,6 +331,9 @@ tr:hover .task-link span, tr.selected .task-link span, .task-link:focus-visible 
 .cancel-button:hover:not(:disabled) { color: #fff; background: #8e3f3a; border-color: #6f2c28; }
 .cancel-button:disabled { color: #a1a6a3; background: #dfe2df; border-color: #c2c6c3; cursor: not-allowed; }
 .failed-action-state { color: #b42318; font: 800 12px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .08em; }
+.retry-button { min-width: 94px; padding: 9px 13px; color: #fff; background: #8e3f3a; border: 1px solid #6f2c28; border-radius: 2px; font: 800 12px ui-monospace, "SFMono-Regular", Consolas, monospace; cursor: pointer; }
+.retry-button:hover:not(:disabled) { background: #6f2c28; }
+.retry-button:disabled { color: #a1a6a3; background: #dfe2df; border-color: #c2c6c3; cursor: not-allowed; }
 
 .inbox-list { display: grid; gap: 13px; }
 .inbox-item { padding: 18px 20px; background: rgba(250, 251, 249, .9); border: 1px solid #b8bdb9; box-shadow: 0 3px 10px rgba(30, 35, 32, .08); }

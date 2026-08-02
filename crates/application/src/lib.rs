@@ -160,13 +160,16 @@ pub fn compose_app_shell_with_inbox(
             }
 
             let task_is_runnable = record.task_status == "READY" && record.current_run_id.is_none();
+            let failed_run_is_retryable = run_status == Some("FAILED");
             if task_is_runnable {
                 summary.runnable += 1;
             }
-            let can_queue = mutations_available && task_is_runnable;
+            let can_queue = mutations_available && (task_is_runnable || failed_run_is_retryable);
             let queue_unavailable_reason = (!can_queue).then(|| {
                 if !mutations_available {
                     "Coordinatorへ接続し、最新Projectionを取得してください".to_owned()
+                } else if failed_run_is_retryable {
+                    "FAILED Runを新しいAttemptとして再実行できます".to_owned()
                 } else if record.current_run_id.is_some() {
                     "このTaskには進行中または記録済みのRunがあります".to_owned()
                 } else {
