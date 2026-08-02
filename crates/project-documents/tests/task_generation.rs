@@ -1,4 +1,6 @@
-use gameforge_project_documents::{TaskDraft, load_task_document, render_task_markdown};
+use gameforge_project_documents::{
+    TaskDraft, load_task_document, mock_task_draft, render_task_markdown,
+};
 
 #[test]
 fn renders_a_draft_that_can_be_loaded_as_a_task_document() {
@@ -16,4 +18,13 @@ fn renders_a_draft_that_can_be_loaded_as_a_task_document() {
     assert_eq!(document.id().as_str(), "TASK-GENERATED");
     assert_eq!(document.title(), "Generated task");
     assert_eq!(document.acceptance_criteria(), &["AC-GENERATED"]);
+}
+
+#[test]
+fn mock_conversation_produces_a_previewable_draft() {
+    let draft = mock_task_draft("TASK-MOCK", "Add a sparkle effect\nMake it configurable.");
+
+    assert_eq!(draft.title, "Add a sparkle effect");
+    assert_eq!(draft.purpose, "Add a sparkle effect\nMake it configurable.");
+    assert!(render_task_markdown(&draft).contains("status: draft"));
 }
