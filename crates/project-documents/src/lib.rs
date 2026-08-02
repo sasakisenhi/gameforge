@@ -53,24 +53,28 @@ pub fn mock_task_draft(task_id: &str, request: &str) -> TaskDraft {
 /// The result is still passed through `load_task_document` before persistence.
 #[must_use]
 pub fn render_task_markdown(draft: &TaskDraft) -> String {
-    let list = |items: &[String]| {
+    let list = |field: &str, items: &[String]| {
         if items.is_empty() {
-            "[]".to_owned()
+            format!("{field}: []\n")
         } else {
-            items
-                .iter()
-                .map(|item| format!("  - {item}\n"))
-                .collect::<String>()
+            format!(
+                "{field}:\n{}",
+                items
+                    .iter()
+                    .map(|item| format!("  - {item}\n"))
+                    .collect::<String>()
+            )
         }
     };
     format!(
-        "---\nschema_version: 1\nid: {}\ntitle: {}\nstatus: draft\ncontract_revision: 1\nacceptance_criteria:\n{}dependencies: []\nallowed_paths:\n{}test_paths:\n{}forbidden_paths:\n{}risk: low\n---\n\n# 目的\n\n{}\n",
+        "---\nschema_version: 1\nid: {}\ntitle: {}\nstatus: draft\ncontract_revision: 1\nacceptance_criteria:\n{}dependencies: []\n{}{}{}risk: low\n---\n\n# 目的\n\n{}\n",
         draft.id,
         draft.title,
-        list(&draft.acceptance_criteria),
-        list(&draft.allowed_paths),
-        list(&draft.test_paths),
-        list(&draft.forbidden_paths),
+        list("acceptance_criteria", &draft.acceptance_criteria)
+            .replace("acceptance_criteria:\n", ""),
+        list("allowed_paths", &draft.allowed_paths),
+        list("test_paths", &draft.test_paths),
+        list("forbidden_paths", &draft.forbidden_paths),
         draft.purpose,
     )
 }

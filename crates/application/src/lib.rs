@@ -102,6 +102,14 @@ pub struct InboxView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskGenerationPreview {
+    pub task_id: String,
+    pub title: String,
+    pub purpose: String,
+    pub acceptance_criteria: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppShellView {
     pub project_name: String,
     pub project_root: String,
@@ -293,6 +301,11 @@ pub enum InboxIntent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplicationCommand {
+    AddTaskFromConversation {
+        task_id: String,
+        request: String,
+        expected_projection_revision: u64,
+    },
     QueueTaskRun {
         task_id: String,
         expected_projection_revision: u64,
@@ -306,6 +319,64 @@ pub enum ApplicationCommand {
         answer: String,
         expected_projection_revision: u64,
     },
+}
+
+pub fn preview_task_generation(
+    request: &str,
+    next_task_id: &str,
+) -> Result<TaskGenerationPreview, ActionError> {
+    if request.trim().is_empty() {
+        return Err(ActionError::ActionUnavailable {
+            reason: "実装したい内容を入力してください".to_owned(),
+        });
+    }
+    let title = request
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(80)
+        .collect::<String>();
+    Ok(TaskGenerationPreview {
+        task_id: next_task_id.to_owned(),
+        title: if title.is_empty() {
+            "Generated task".to_owned()
+        } else {
+            title
+        },
+        purpose: request.trim().to_owned(),
+        acceptance_criteria: vec![format!("{next_task_id}-ACCEPTANCE")],
+    })
+}
+
+pub fn command_for_task_generation(
+    view: &AppShellView,
+    request: &str,
+    task_id: &str,
+) -> Result<ApplicationCommand, ActionError> {
+    if !matches!(view.connection, ConnectionState::Connected) {
+        return Err(ActionError::CoordinatorDisconnected);
+    }
+    if view.is_stale {
+        return Err(ActionError::StaleProjection);
+    }
+    preview_task_generation(request, task_id)?;
+    if view
+        .development
+        .task_rows
+        .iter()
+        .any(|row| row.task_id == task_id)
+    {
+        return Err(ActionError::ActionUnavailable {
+            reason: format!("Task IDが既に存在します: {task_id}"),
+        });
+    }
+    Ok(ApplicationCommand::AddTaskFromConversation {
+        task_id: task_id.to_owned(),
+        request: request.trim().to_owned(),
+        expected_projection_revision: view.projection_revision,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

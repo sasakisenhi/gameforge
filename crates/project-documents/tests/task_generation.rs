@@ -21,6 +21,14 @@ fn renders_a_draft_that_can_be_loaded_as_a_task_document() {
 }
 
 #[test]
+fn renders_empty_test_paths_without_merging_the_next_front_matter_field() {
+    let source = render_task_markdown(&mock_task_draft("TASK-EMPTY", "Add a task"));
+
+    assert!(source.contains("test_paths: []\nforbidden_paths:"));
+    load_task_document(&source).expect("empty test_paths must remain valid YAML");
+}
+
+#[test]
 fn mock_conversation_produces_a_previewable_draft() {
     let draft = mock_task_draft("TASK-MOCK", "Add a sparkle effect\nMake it configurable.");
 

@@ -15,7 +15,7 @@ use events::{
     input_required_event, queued_event, start_requested_event, supervisor_state_event,
 };
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use gameforge_application::{
     ApplicationCommand, LocalVerificationRequest, RunExecutionPort, RunLaunchOutcome,
@@ -30,13 +30,15 @@ use gameforge_event_journal::{
 };
 use gameforge_persistence::ProjectionStore;
 use gameforge_project_documents::{
-    TaskDocument, TaskDocumentStatus, is_test_path, validate_changed_paths,
+    TaskDocument, TaskDocumentStatus, is_test_path, load_task_document, mock_task_draft,
+    render_task_markdown, validate_changed_paths, validate_task_documents,
 };
 use gameforge_runtime::{
     ProjectWriterLease, QueuedRun, ScheduleConfig, ScheduleSnapshot, plan_schedule,
 };
 
 pub struct ProjectSession {
+    project_root: PathBuf,
     snapshot: ProjectSnapshot,
     documents: Vec<TaskDocument>,
     journal: EventJournal,
@@ -57,6 +59,16 @@ impl ProjectSession {
     ) -> Result<ProjectSnapshot, BootstrapError> {
         validate_command_context(&context)?;
         match command {
+            ApplicationCommand::AddTaskFromConversation {
+                task_id,
+                request,
+                expected_projection_revision,
+            } => self.add_task_from_conversation(
+                context,
+                &task_id,
+                &request,
+                expected_projection_revision,
+            ),
             ApplicationCommand::QueueTaskRun {
                 task_id,
                 expected_projection_revision,
@@ -76,6 +88,50 @@ impl ProjectSession {
                 expected_projection_revision,
             ),
         }
+    }
+
+    fn add_task_from_conversation(
+        &mut self,
+        context: CommandContext,
+        task_id: &str,
+        request: &str,
+        expected: u64,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        if expected != self.snapshot.projection_revision {
+            return Err(BootstrapError::ProjectionRevisionConflict {
+                expected,
+                actual: self.snapshot.projection_revision,
+            });
+        }
+        if self
+            .documents
+            .iter()
+            .any(|document| document.id().as_str() == task_id)
+        {
+            return Err(BootstrapError::InvalidCommand(format!(
+                "Task ID already exists: {task_id}"
+            )));
+        }
+        let draft = mock_task_draft(task_id, request);
+        let source = render_task_markdown(&draft);
+        let document = load_task_document(&source)
+            .map_err(|error| BootstrapError::Document(error.to_string()))?;
+        let path = self
+            .project_root
+            .join(".game-dev/tasks")
+            .join(format!("{task_id}.md"));
+        fs::write(path, source).map_err(BootstrapError::from)?;
+        self.documents.push(document);
+        self.documents
+            .sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+        validate_task_documents(&self.documents)
+            .map_err(|error| BootstrapError::Document(error.to_string()))?;
+        self.projection
+            .rebuild(&self.documents, self.journal.events())
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+        self.refresh_snapshot()?;
+        let _ = context;
+        Ok(self.snapshot.clone())
     }
 
     pub fn run_scheduler(

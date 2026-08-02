@@ -95,6 +95,9 @@ pub fn execute_board_intent(
     };
     let prepared = command_description(&command);
     let target = match &command {
+        ApplicationCommand::AddTaskFromConversation { task_id, .. } => {
+            CommandTarget::QueueTask(task_id.clone())
+        }
         ApplicationCommand::QueueTaskRun { task_id, .. } => {
             CommandTarget::QueueTask(task_id.clone())
         }
@@ -219,6 +222,9 @@ enum CommandTarget {
 
 fn command_description(command: &ApplicationCommand) -> String {
     match command {
+        ApplicationCommand::AddTaskFromConversation { task_id, .. } => {
+            format!("Task {task_id} を会話から追加")
+        }
         ApplicationCommand::QueueTaskRun {
             task_id,
             expected_projection_revision,
