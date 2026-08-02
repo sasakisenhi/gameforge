@@ -2,6 +2,7 @@
 
 use crate::views::{
     brand_symbol, connection_presentation, development_board, inbox_page, intent_page,
+    plan_review_page,
 };
 use crate::{ColorTheme, CommandResult, Route, UiAction, UiState, reduce_ui_state};
 use dioxus::prelude::*;
@@ -165,6 +166,7 @@ pub fn App(
                                 on_command,
                             ),
                             Route::Intent => intent_page(&view, command_notice, app_view, on_command),
+                            Route::PlanReview => plan_review_page(&view, command_notice, app_view, on_command),
                             route => crate::views::placeholder(route),
                         }
                     }

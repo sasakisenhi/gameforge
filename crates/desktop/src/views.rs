@@ -7,7 +7,8 @@ use crate::{
 use dioxus::prelude::*;
 use gameforge_application::{
     AppShellView, ApplicationCommand, BoardIntent, ConnectionState, InboxIntent, InboxItemView,
-    TaskRowView, command_for_task_generation, preview_task_generation,
+    TaskRowView, command_for_promote_task_to_ready, command_for_task_generation,
+    preview_task_generation,
 };
 
 const BRAND_ICON_SVG: &str = include_str!("../assets/brand-icon.svg");
@@ -693,6 +694,62 @@ pub(crate) fn intent_page(
                         p { class: "muted", "依頼を入力するとプレビューが表示されます。" }
                     }
                 }
+            }
+        }
+    }
+}
+
+pub(crate) fn plan_review_page(
+    view: &AppShellView,
+    mut notice: Signal<Option<String>>,
+    mut app_view: Signal<AppShellView>,
+    on_command: Option<Callback<ApplicationCommand, CommandResult>>,
+) -> Element {
+    let drafts = view
+        .development
+        .task_rows
+        .iter()
+        .filter(|row| row.task_status == "DRAFT")
+        .cloned()
+        .collect::<Vec<_>>();
+    let has_drafts = !drafts.is_empty();
+    let rows = drafts.into_iter().map(|row| {
+        let task_id = row.task_id.clone();
+        let current_view = view.clone();
+        rsx! {
+            div { class: "placeholder-card", key: "{row.task_id}",
+                span { class: "eyebrow", "DRAFT TASK" }
+                strong { "{row.task_id} · {row.title}" }
+                p { "このTask Contractはまだ実行対象として承認されていません。" }
+                button {
+                    class: "queue-button",
+                    onclick: move |_| {
+                        match command_for_promote_task_to_ready(&current_view, &task_id) {
+                            Ok(command) => match on_command.map(|callback| callback.call(command)) {
+                                Some(CommandResult::Applied(updated)) => {
+                                    app_view.set(*updated);
+                                    notice.set(Some(format!("{task_id} をREADYにしました。")));
+                                }
+                                Some(CommandResult::Failed(error)) => notice.set(Some(error)),
+                                _ => notice.set(Some("Coordinatorが利用できません".to_owned())),
+                            },
+                            Err(error) => notice.set(Some(format!("操作できません: {error}"))),
+                        }
+                    },
+                    "READYにする"
+                }
+            }
+        }
+    });
+    rsx! {
+        section { class: "page plan-page",
+            p { class: "eyebrow", "REVIEW / APPROVE" }
+            h2 { "Task Contractを承認" }
+            p { "AIとの対話で作成されたDRAFTを確認し、実行可能なREADYへ変更します。" }
+            if !has_drafts {
+                div { class: "placeholder-card", p { "承認待ちのDRAFT Taskはありません。" } }
+            } else {
+                div { class: "intent-grid", {rows} }
             }
         }
     }

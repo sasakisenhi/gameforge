@@ -383,6 +383,36 @@ pub fn command_for_task_generation(
     })
 }
 
+pub fn command_for_promote_task_to_ready(
+    view: &AppShellView,
+    task_id: &str,
+) -> Result<ApplicationCommand, ActionError> {
+    if !matches!(view.connection, ConnectionState::Connected) {
+        return Err(ActionError::CoordinatorDisconnected);
+    }
+    if view.is_stale {
+        return Err(ActionError::StaleProjection);
+    }
+    let task = view
+        .development
+        .task_rows
+        .iter()
+        .find(|row| row.task_id == task_id)
+        .ok_or_else(|| ActionError::TaskNotFound(task_id.to_owned()))?;
+    if task.task_status != "DRAFT" {
+        return Err(ActionError::ActionUnavailable {
+            reason: format!(
+                "Task {} はDRAFTではありません: {}",
+                task.task_id, task.task_status
+            ),
+        });
+    }
+    Ok(ApplicationCommand::PromoteTaskToReady {
+        task_id: task_id.to_owned(),
+        expected_projection_revision: view.projection_revision,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionError {
     CoordinatorDisconnected,
