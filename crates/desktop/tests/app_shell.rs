@@ -82,6 +82,25 @@ fn emphasizes_the_next_runnable_task_and_exposes_task_inspection() {
 }
 
 #[test]
+fn does_not_render_cancel_for_a_failed_run() {
+    let html = render_app(&view(
+        ConnectionState::Connected,
+        vec![DevelopmentBoardRecord {
+            task_id: "TASK-FAILED".to_owned(),
+            title: "失敗したTask".to_owned(),
+            task_status: "ACTIVE".to_owned(),
+            current_run_id: Some("RUN-FAILED".to_owned()),
+            run_status: Some("FAILED".to_owned()),
+            health_flags: vec!["SCOPE_VIOLATION".to_owned()],
+        }],
+    ));
+
+    assert!(!html.contains("Cancel Run"));
+    assert!(html.contains("SCOPE_VIOLATION"));
+    assert!(html.contains("FAILED"));
+}
+
+#[test]
 fn renders_persistent_disconnect_banner_and_empty_state() {
     let html = render_app(&view(
         ConnectionState::Disconnected {
