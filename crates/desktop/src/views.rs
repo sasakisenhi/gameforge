@@ -7,7 +7,7 @@ use crate::{
 use dioxus::prelude::*;
 use gameforge_application::{
     AppShellView, ApplicationCommand, BoardIntent, ConnectionState, InboxIntent, InboxItemView,
-    TaskRowView,
+    TaskRowView, command_for_task_generation, preview_task_generation,
 };
 
 const BRAND_ICON_SVG: &str = include_str!("../assets/brand-icon.svg");
@@ -632,6 +632,67 @@ pub(crate) fn placeholder(route: Route) -> Element {
             div { class: "placeholder-card",
                 span { "NEXT VERTICAL SLICE" }
                 strong { "この画面は以降のMilestoneで接続されます" }
+            }
+        }
+    }
+}
+
+pub(crate) fn intent_page(
+    view: &AppShellView,
+    mut notice: Signal<Option<String>>,
+    mut app_view: Signal<AppShellView>,
+    on_command: Option<Callback<ApplicationCommand, CommandResult>>,
+) -> Element {
+    let mut request = use_signal(String::new);
+    let mut task_id = use_signal(|| "TASK-GENERATED-001".to_owned());
+    let preview = preview_task_generation(&request.read(), &task_id.read()).ok();
+    let acceptance = preview
+        .as_ref()
+        .map_or_else(String::new, |value| value.acceptance_criteria.join(", "));
+    let current_view = view.clone();
+    rsx! {
+        section { class: "page intent-page",
+            p { class: "eyebrow", "DEFINE / CONVERSE" }
+            h2 { "AIとの対話からTaskを追加" }
+            p { "実装したいことを自然文で入力し、生成されたTask Contractを確認してから保存します。" }
+            div { class: "intent-grid",
+                div { class: "placeholder-card",
+                    label { "Task ID" }
+                    input { value: "{task_id}", oninput: move |event| task_id.set(event.value()) }
+                    label { "AIへの依頼" }
+                    textarea {
+                        value: "{request}",
+                        placeholder: "例: 砂が空きセルへ落ちる処理を追加したい",
+                        oninput: move |event| request.set(event.value()),
+                    }
+                    button {
+                        class: "queue-button",
+                        disabled: preview.is_none(),
+                        onclick: move |_| {
+                            let result = command_for_task_generation(&current_view, &request.read(), &task_id.read());
+                            match result {
+                                Ok(command) => match on_command.map(|callback| callback.call(command)) {
+                                    Some(CommandResult::Applied(updated)) => { app_view.set(*updated); notice.set(Some("Taskを追加しました。Developmentで確認できます。".to_owned())); }
+                                    Some(CommandResult::Failed(error)) => notice.set(Some(error)),
+                                    _ => notice.set(Some("Coordinatorが利用できません".to_owned())),
+                                },
+                                Err(error) => notice.set(Some(format!("操作できません: {error}"))),
+                            }
+                        },
+                        "Taskを追加"
+                    }
+                }
+                div { class: "placeholder-card",
+                    span { "GENERATED CONTRACT PREVIEW" }
+                    if let Some(ref preview) = preview {
+                        strong { "{preview.task_id} · {preview.title}" }
+                        p { "{preview.purpose}" }
+                        p { "受け入れ基準: {acceptance}" }
+                        p { class: "muted", "allowed_paths: .game-dev/generated/**" }
+                    } else {
+                        p { class: "muted", "依頼を入力するとプレビューが表示されます。" }
+                    }
+                }
             }
         }
     }

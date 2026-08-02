@@ -1,7 +1,7 @@
 //! Top-level desktop shell and navigation.
 
 use crate::views::{
-    brand_symbol, connection_presentation, development_board, inbox_page, placeholder,
+    brand_symbol, connection_presentation, development_board, inbox_page, intent_page,
 };
 use crate::{ColorTheme, CommandResult, Route, UiAction, UiState, reduce_ui_state};
 use dioxus::prelude::*;
@@ -164,7 +164,8 @@ pub fn App(
                                 Some(app_view),
                                 on_command,
                             ),
-                            route => placeholder(route),
+                            Route::Intent => intent_page(&view, command_notice, app_view, on_command),
+                            route => crate::views::placeholder(route),
                         }
                     }
                 }
