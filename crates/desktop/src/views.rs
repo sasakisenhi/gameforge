@@ -204,6 +204,13 @@ pub(crate) fn development_board(
                 }
                 td { class: "actions",
                     if let Some(run_id) = cancel_id {
+                        if row.run_status.as_deref() == Some("FAILED") {
+                            span {
+                                class: "failed-action-state",
+                                title: "FAILED状態のRunは取消しできません。ログを確認して再実行してください。",
+                                "FAILED"
+                            }
+                        } else {
                         button {
                             class: "cancel-button",
                             disabled: !row.can_cancel,
@@ -224,6 +231,7 @@ pub(crate) fn development_board(
                                 notice_signal.set(Some(effect.notice));
                             },
                             "Cancel Run"
+                        }
                         }
                     } else {
                         button {
@@ -425,7 +433,9 @@ pub(crate) fn development_board(
                         }
                     }
                     p { class: "inspector-note",
-                        if selected.run_status.as_deref() == Some("LOCAL_CHECKING") {
+                        if selected.run_status.as_deref() == Some("FAILED") {
+                            "このRunは失敗しました。HEALTH欄の失敗理由とruntime logを確認してから再実行してください。"
+                        } else if selected.run_status.as_deref() == Some("LOCAL_CHECKING") {
                             "Local Checkを実行中です。runtime logから進行状況を確認できます。"
                         } else if selected.current_run_id.is_some() {
                             "Run artifactはCoordinatorが保持するworktreeとruntime記録を参照します。"
