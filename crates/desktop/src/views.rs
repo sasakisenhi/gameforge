@@ -386,9 +386,52 @@ pub(crate) fn development_board(
                                 }
                             }
                         }
+                        div {
+                            dt { "RUN STATUS" }
+                            dd {
+                                if let Some(run_status) = selected.run_status.as_deref() {
+                                    {status_pill(run_status, "run")}
+                                } else {
+                                    span { class: "muted", "Not started" }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "artifact-links",
+                        span { class: "inspector-label", "RUN ARTIFACTS" }
+                        if let Some(path) = selected.artifacts.worktree_path.as_deref() {
+                            a {
+                                class: "artifact-link",
+                                href: "file://{path}",
+                                "WORKTREE"
+                                span { "↗" }
+                            }
+                        }
+                        if let Some(path) = selected.artifacts.runtime_log_path.as_deref() {
+                            a {
+                                class: "artifact-link",
+                                href: "file://{path}",
+                                "RUNTIME LOG"
+                                span { "↗" }
+                            }
+                        }
+                        if let Some(path) = selected.artifacts.diff_path.as_deref() {
+                            a {
+                                class: "artifact-link",
+                                href: "file://{path}",
+                                "DIFF"
+                                span { "↗" }
+                            }
+                        }
                     }
                     p { class: "inspector-note",
-                        "Contract、受け入れ基準、依存関係はTask detail projectionの接続後に表示されます。"
+                        if selected.run_status.as_deref() == Some("LOCAL_CHECKING") {
+                            "Local Checkを実行中です。runtime logから進行状況を確認できます。"
+                        } else if selected.current_run_id.is_some() {
+                            "Run artifactはCoordinatorが保持するworktreeとruntime記録を参照します。"
+                        } else {
+                            "Runが開始されると、worktree・runtime log・diffへの導線が表示されます。"
+                        }
                     }
                 }
             } else if has_rows {

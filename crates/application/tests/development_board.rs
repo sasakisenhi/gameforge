@@ -65,7 +65,12 @@ fn composes_summary_from_saved_projection_facts() {
         run.diff_path.as_deref(),
         Some("/work/powder/.game-dev/runtime/runs/RUN-1/diff.patch")
     );
-    assert!(view.development.task_rows[2].artifacts.worktree_path.is_none());
+    assert!(
+        view.development.task_rows[2]
+            .artifacts
+            .worktree_path
+            .is_none()
+    );
 }
 
 #[test]
