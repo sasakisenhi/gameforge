@@ -65,6 +65,7 @@ pub fn start_project(
     };
 
     Ok(ProjectSession {
+        project_root: project_root.to_path_buf(),
         snapshot,
         documents,
         journal,
