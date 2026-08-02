@@ -52,6 +52,20 @@ fn composes_summary_from_saved_projection_facts() {
     assert_eq!(view.development.summary.failed, 1);
     assert_eq!(view.development.summary.needs_attention, 1);
     assert_eq!(view.development.task_rows.len(), 4);
+    let run = &view.development.task_rows[0].artifacts;
+    assert_eq!(
+        run.worktree_path.as_deref(),
+        Some("/work/powder/.game-dev/worktrees/RUN-1")
+    );
+    assert_eq!(
+        run.runtime_log_path.as_deref(),
+        Some("/work/powder/.game-dev/runtime/runs/RUN-1")
+    );
+    assert_eq!(
+        run.diff_path.as_deref(),
+        Some("/work/powder/.game-dev/runtime/runs/RUN-1/diff.patch")
+    );
+    assert!(view.development.task_rows[2].artifacts.worktree_path.is_none());
 }
 
 #[test]
