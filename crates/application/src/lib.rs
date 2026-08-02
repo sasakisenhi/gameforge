@@ -55,6 +55,14 @@ pub struct TaskRowView {
     pub queue_unavailable_reason: Option<String>,
     pub can_cancel: bool,
     pub cancel_unavailable_reason: Option<String>,
+    pub artifacts: TaskArtifactsView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskArtifactsView {
+    pub worktree_path: Option<String>,
+    pub runtime_log_path: Option<String>,
+    pub diff_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -190,6 +198,28 @@ pub fn compose_app_shell_with_inbox(
                     }
                 });
 
+            let artifacts = record.current_run_id.as_deref().map_or_else(
+                || TaskArtifactsView {
+                    worktree_path: None,
+                    runtime_log_path: None,
+                    diff_path: None,
+                },
+                |run_id| TaskArtifactsView {
+                    worktree_path: Some(format!(
+                        "{}/.game-dev/worktrees/{run_id}",
+                        context.project_root
+                    )),
+                    runtime_log_path: Some(format!(
+                        "{}/.game-dev/runtime/runs/{run_id}",
+                        context.project_root
+                    )),
+                    diff_path: Some(format!(
+                        "{}/.game-dev/runtime/runs/{run_id}/diff.patch",
+                        context.project_root
+                    )),
+                },
+            );
+
             TaskRowView {
                 task_id: record.task_id,
                 title: record.title,
@@ -201,6 +231,7 @@ pub fn compose_app_shell_with_inbox(
                 queue_unavailable_reason,
                 can_cancel,
                 cancel_unavailable_reason,
+                artifacts,
             }
         })
         .collect();
