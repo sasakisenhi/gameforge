@@ -31,7 +31,7 @@ use gameforge_event_journal::{
 use gameforge_persistence::ProjectionStore;
 use gameforge_project_documents::{
     TaskDocument, TaskDocumentStatus, is_test_path, load_task_document, mock_task_draft,
-    render_task_markdown, validate_changed_paths, validate_task_documents,
+    promote_task_to_ready, render_task_markdown, validate_changed_paths, validate_task_documents,
 };
 use gameforge_runtime::{
     ProjectWriterLease, QueuedRun, ScheduleConfig, ScheduleSnapshot, plan_schedule,
@@ -59,6 +59,10 @@ impl ProjectSession {
     ) -> Result<ProjectSnapshot, BootstrapError> {
         validate_command_context(&context)?;
         match command {
+            ApplicationCommand::PromoteTaskToReady {
+                task_id,
+                expected_projection_revision,
+            } => self.promote_task_to_ready(context, &task_id, expected_projection_revision),
             ApplicationCommand::AddTaskFromConversation {
                 task_id,
                 request,
@@ -88,6 +92,43 @@ impl ProjectSession {
                 expected_projection_revision,
             ),
         }
+    }
+
+    fn promote_task_to_ready(
+        &mut self,
+        _context: CommandContext,
+        task_id: &str,
+        expected: u64,
+    ) -> Result<ProjectSnapshot, BootstrapError> {
+        if expected != self.snapshot.projection_revision {
+            return Err(BootstrapError::ProjectionRevisionConflict {
+                expected,
+                actual: self.snapshot.projection_revision,
+            });
+        }
+        let index = self
+            .documents
+            .iter()
+            .position(|document| document.id().as_str() == task_id)
+            .ok_or_else(|| BootstrapError::TaskNotFound(task_id.to_owned()))?;
+        let path = self
+            .project_root
+            .join(".game-dev/tasks")
+            .join(format!("{task_id}.md"));
+        let source = fs::read_to_string(&path).map_err(BootstrapError::from)?;
+        let ready_source = promote_task_to_ready(&source)
+            .map_err(|error| BootstrapError::InvalidCommand(error.to_string()))?;
+        let document = load_task_document(&ready_source)
+            .map_err(|error| BootstrapError::Document(error.to_string()))?;
+        self.documents[index] = document;
+        fs::write(path, ready_source).map_err(BootstrapError::from)?;
+        validate_task_documents(&self.documents)
+            .map_err(|error| BootstrapError::Document(error.to_string()))?;
+        self.projection
+            .rebuild(&self.documents, self.journal.events())
+            .map_err(|error| BootstrapError::Projection(error.to_string()))?;
+        self.refresh_snapshot()?;
+        Ok(self.snapshot.clone())
     }
 
     fn add_task_from_conversation(

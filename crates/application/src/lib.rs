@@ -306,6 +306,10 @@ pub enum ApplicationCommand {
         request: String,
         expected_projection_revision: u64,
     },
+    PromoteTaskToReady {
+        task_id: String,
+        expected_projection_revision: u64,
+    },
     QueueTaskRun {
         task_id: String,
         expected_projection_revision: u64,
