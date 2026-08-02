@@ -170,6 +170,31 @@ fn rejects_mutation_from_disconnected_stale_or_busy_views() {
 }
 
 #[test]
+fn failed_run_is_retryable_but_active_run_is_not_queueable() {
+    let failed = compose_app_shell(
+        context(ConnectionState::Connected),
+        vec![record(
+            "TASK-FAILED",
+            "READY",
+            Some("RUN-1"),
+            Some("FAILED"),
+        )],
+    );
+    assert!(failed.development.task_rows[0].can_queue);
+
+    let active = compose_app_shell(
+        context(ConnectionState::Connected),
+        vec![record(
+            "TASK-ACTIVE",
+            "READY",
+            Some("RUN-1"),
+            Some("AGENT_RUNNING"),
+        )],
+    );
+    assert!(!active.development.task_rows[0].can_queue);
+}
+
+#[test]
 fn started_run_requires_every_external_handle() {
     assert!(StartedRun::new("resource-1", "worktree-1", "agent-1").is_ok());
     assert_eq!(

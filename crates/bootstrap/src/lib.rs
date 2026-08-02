@@ -676,7 +676,7 @@ impl ProjectSession {
             .iter()
             .find(|row| row.task_id == task_id)
             .ok_or_else(|| BootstrapError::TaskNotFound(task_id.to_owned()))?;
-        if row.current_run_id.is_some() {
+        if row.current_run_id.is_some() && row.run_status.as_deref() != Some("FAILED") {
             return Err(BootstrapError::TaskAlreadyHasRun(task_id.to_owned()));
         }
         let document = self
