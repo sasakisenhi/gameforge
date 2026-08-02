@@ -23,6 +23,31 @@ pub struct TaskDraft {
     pub forbidden_paths: Vec<String>,
 }
 
+/// Deterministic stand-in for the future AI conversation adapter.
+#[must_use]
+pub fn mock_task_draft(task_id: &str, request: &str) -> TaskDraft {
+    let title = request
+        .split_once('\n')
+        .map_or(request, |(first_line, _)| first_line)
+        .trim()
+        .chars()
+        .take(80)
+        .collect::<String>();
+    TaskDraft {
+        id: task_id.to_owned(),
+        title: if title.is_empty() {
+            "Generated task".to_owned()
+        } else {
+            title
+        },
+        purpose: request.trim().to_owned(),
+        acceptance_criteria: vec![format!("{task_id}-ACCEPTANCE")],
+        allowed_paths: vec![".game-dev/generated/**".to_owned()],
+        test_paths: Vec::new(),
+        forbidden_paths: vec![".game-dev/events/**".to_owned()],
+    }
+}
+
 /// Render a draft into the canonical Markdown format used by the project.
 ///
 /// The result is still passed through `load_task_document` before persistence.
