@@ -13,7 +13,7 @@ use gameforge_application::{
 use gameforge_bootstrap::{BootstrapError, ProjectCoordinator, start_project};
 use gameforge_codex_adapter::{CodexRunExecution, CodexRunExecutionConfig};
 use gameforge_desktop::{
-    App, CommandResult, CoordinatorWorker, CoordinatorWorkerContext, DesktopConfig,
+    App, CommandResult, CoordinatorWorker, CoordinatorWorkerContext, DesktopConfig, append_error,
     spawn_coordinator_worker,
 };
 use gameforge_local_check_adapter::{LocalCheckRunner, LocalVerificationConfig};
@@ -112,14 +112,27 @@ fn desktop_root() -> Element {
 
 fn execute_application_command(command: ApplicationCommand) -> CommandResult {
     let Some(initial_view) = INITIAL_VIEW.get() else {
+        // There is no project root available in this failure path.
         return CommandResult::Failed("初期Viewが利用できません".to_owned());
     };
     let Some(coordinator) = COORDINATOR.get() else {
+        append_error(
+            Path::new("."),
+            "application_command",
+            "Coordinatorが利用できません",
+        );
         return CommandResult::Failed("Coordinatorが利用できません".to_owned());
     };
     let snapshot = match coordinator.execute(command) {
         Ok(snapshot) => snapshot,
-        Err(error) => return CommandResult::Failed(error.to_string()),
+        Err(error) => {
+            append_error(
+                Path::new(&initial_view.project_root),
+                "application_command",
+                &error.to_string(),
+            );
+            return CommandResult::Failed(error.to_string());
+        }
     };
     let Some(config) = DESKTOP_CONFIG.get().copied() else {
         return CommandResult::Failed("Desktop設定が利用できません".to_owned());
