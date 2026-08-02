@@ -1,5 +1,6 @@
 use gameforge_project_documents::{
-    TaskDraft, load_task_document, mock_task_draft, render_task_markdown,
+    TaskDocumentStatus, TaskDraft, load_task_document, mock_task_draft, promote_task_to_ready,
+    render_task_markdown,
 };
 
 #[test]
@@ -26,6 +27,28 @@ fn renders_empty_test_paths_without_merging_the_next_front_matter_field() {
 
     assert!(source.contains("test_paths: []\nforbidden_paths:"));
     load_task_document(&source).expect("empty test_paths must remain valid YAML");
+}
+
+#[test]
+fn promotes_a_draft_to_ready_without_changing_the_contract() {
+    let source = render_task_markdown(&mock_task_draft("TASK-READY", "Add gravity"));
+    let ready = promote_task_to_ready(&source).expect("draft can be approved");
+    let document = load_task_document(&ready).expect("approved document remains valid");
+
+    assert_eq!(document.status(), TaskDocumentStatus::Ready);
+    assert!(ready.contains("status: ready"));
+    assert!(ready.contains("# 目的\n\nAdd gravity"));
+}
+
+#[test]
+fn refuses_to_promote_an_already_ready_task() {
+    let source = render_task_markdown(&mock_task_draft("TASK-READY", "Add gravity")).replacen(
+        "status: draft",
+        "status: ready",
+        1,
+    );
+
+    assert!(promote_task_to_ready(&source).is_err());
 }
 
 #[test]

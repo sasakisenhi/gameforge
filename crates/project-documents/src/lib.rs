@@ -430,6 +430,24 @@ pub fn load_task_document(source: &str) -> Result<TaskDocument, DocumentError> {
     })
 }
 
+/// Approves a draft Task Contract without changing its body or other fields.
+pub fn promote_task_to_ready(source: &str) -> Result<String, DocumentError> {
+    let document = load_task_document(source)?;
+    if document.status() != TaskDocumentStatus::Draft {
+        return Err(DocumentError::InvalidDomainValue(format!(
+            "only DRAFT tasks can become READY: {}",
+            document.id().as_str()
+        )));
+    }
+    let marker = "status: draft";
+    if !source.contains(marker) {
+        return Err(DocumentError::InvalidFrontMatter(
+            "draft status marker is missing".to_owned(),
+        ));
+    }
+    Ok(source.replacen(marker, "status: ready", 1))
+}
+
 pub fn validate_task_documents(documents: &[TaskDocument]) -> Result<Vec<TaskId>, DocumentError> {
     let tasks = documents
         .iter()
