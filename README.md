@@ -1,3 +1,6 @@
+Status: Experimental / Paused 
+「既存の仕様駆動開発ツールとの重複を認識し、現在は開発を中断している」
+
 # gameforge
 
 AI並列ゲーム開発コントロールプレーンの実装です。設計資料のMilestone 0と、Dioxus Nativeによる最初のデスクトップ縦切りを実装しています。
